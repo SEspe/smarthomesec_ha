@@ -7,7 +7,10 @@ DOMAIN = "smarthomesec"
 
 INTEGRATION_TITLE = "SmartHomeSec"
 
-API_BASEHOST = "smarthomesec.bydemes.com"
+#API_BASEHOST = "smarthomesec.bydemes.com"
+# Norwegian provider...
+API_BASEHOST = "smartalarm.alarm24.no/"
+
 API_BASEPATH = "REST/v2"
 
 TYPE_TRANSLATION = {
