@@ -37,13 +37,30 @@ async def async_setup_entry(
 class SmarthomesecBinarySensor(SmarthomesecBaseSensor, BinarySensorEntity):
     """A binary sensor implementation for Smarthomesec device."""
 
+#    @property
+#    def is_on(self) -> bool:
+#        """Return True if the binary sensor is on."""
+#        if len(self._device["status_open"]):
+#           return (self._device["status_open"][0] == "device_status.dc_open")
+#       elif self._device["status_motion"]:
+#           return (self._device["status_motion"] == "1")
+
+
     @property
     def is_on(self) -> bool:
         """Return True if the binary sensor is on."""
-        if len(self._device["status_open"]):
-            return (self._device["status_open"][0] == "device_status.dc_open")
-        elif self._device["status_motion"]:
-            return (self._device["status_motion"] == "1")
+        # ✅ Dørkontakter
+        if self._device.get("status_open"):
+            return self._device["status_open"][0] == "device_status.dc_open"
+        # ✅ PIR-sensorer
+        if self._device.get("type") == "device_type.pir":
+            motion = self._device.get("status_motion")
+            if motion:
+                return motion == "1"
+            # ✅ fallback: ingen signal = ingen bevegelse
+        return False
+        # ✅ fallback for alt annet
+        return False
 
     @property
     def device_class(self) -> BinarySensorDeviceClass | None:
