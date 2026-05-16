@@ -22,7 +22,7 @@ class SmarthomesecDevice(CoordinatorEntity):
 
     def __init__(self, coord: SmarthomesecCoordinator, device) -> None:
         """Initialize a sensor for Smarthomesec device."""
-        _LOGGER.info(device)
+        _LOGGER.debug(device)
 
         self._coord = coord
         self._device = device
