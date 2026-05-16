@@ -1,0 +1,6 @@
+{
+    "name": "smarthomesec_ha",
+    "render_readme": true,
+    "domains": ["sensor"],
+    "country": ["NO"]
+}
