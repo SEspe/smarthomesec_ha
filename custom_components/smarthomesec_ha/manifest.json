@@ -1,10 +1,12 @@
 {
   "domain": "smarthomesec",
-  "name": "SmartHomeSec integration",
+  "name": "SmartHomeSec",
+  "version": "2024.5.1",
+  "documentation": "https://github.com/SEspe/smarthomesec_ha",
+  "issue_tracker": "https://github.com/SEspe/smarthomesec_ha/issues",
   "config_flow": true,
-  "codeowners": ["@koying"],
-  "dependencies": [],
+  "codeowners": ["@SEspe"],
   "iot_class": "cloud_push",
   "requirements": [],
-  "version": "2024.5.1"
+  "dependencies": []
 }

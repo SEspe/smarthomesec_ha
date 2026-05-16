@@ -1,6 +1,7 @@
 {
-    "name": "smarthomesec_ha",
-    "render_readme": true,
-    "domains": ["sensor"],
-    "country": ["NO"]
+  "name": "SmartHomeSec",
+  "domains": ["smarthomesec"],
+  "homeassistant": "2024.5.0",
+  "country": ["NO"]
 }
+
