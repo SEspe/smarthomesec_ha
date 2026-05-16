@@ -24,6 +24,44 @@ class WSClient(threading.Thread):
     global_wsc = None
     global_stop = False
 
+
+    def run_once(self, duration=5):
+        base = API_BASEHOST.rstrip("/")
+        wsc_url = f"wss://{base}/ws/socket.io/?token={self.token}&transport=websocket&EIO=4"
+
+        LOG.debug("Websocket (on-demand): %s", wsc_url)
+
+        self.wsc = websocket.WebSocketApp(
+            wsc_url,
+            on_message=lambda ws, message: self.on_message(ws, message),
+            on_error=lambda ws, error: self.on_error(ws, error),
+            on_open=lambda ws: self.on_open(ws),
+        )
+
+        import threading, time
+
+        def run_ws():
+            self.wsc.run_forever(
+                ping_interval=20,
+                ping_timeout=10,
+                sslopt={"ca_certs": certifi.where()}
+            )
+
+        t = threading.Thread(target=run_ws)
+        t.start()
+
+        # ✅ la den leve litt
+        time.sleep(duration)
+
+        # ✅ lukk pent
+        LOG.debug("Closing websocket (on-demand)")
+        self.wsc.close()
+
+        # ✅ viktig: reset slik at ny kan opprettes senere
+        self.client.wsc = None
+
+
+
     def __init__(self, client, token):
         LOG.debug("WSClient initializing...")
 
@@ -41,12 +79,20 @@ class WSClient(threading.Thread):
             raise ValueError("The websocket client is not started.")
 
         self.wsc.send(code + data)
-
+# Test fix for feil i loggen
+#
+#  Legger til &EIo=4
+#   ALt2:  Fjerne dobbel slash;  
+#           base = API_BASEHOST.rstrip("/")
+#           wsc_url = f"wss://{base}/socket.io/?token={self.token}&transport=websocket&EIO=4"
+#   Alt3
+#       Fjerne /ws/,  uten dette
+#
+#
+#
     def run(self):
-        wsc_url = (
-            f"wss://{API_BASEHOST}/ws/socket.io/?token=%s&transport=websocket"
-            % (self.token)
-        )
+        base = API_BASEHOST.rstrip("/")
+        wsc_url = f"wss://{base}/ws/socket.io/?token={self.token}&transport=websocket&EIO=4"
 
         LOG.debug("Websocket url: %s", wsc_url)
 
@@ -64,13 +110,38 @@ class WSClient(threading.Thread):
         self.global_wsc = self.wsc
 
         while not self.stop and not self.global_stop:
-            self.wsc.run_forever(ping_interval=10, sslopt={"ca_certs": certifi.where()})
+            LOG.debug("Websocket: run_forever() start")
+            self.wsc.run_forever(
+                ping_interval=20,
+                ping_timeout=10,
+                sslopt={"ca_certs": certifi.where()},
+            )
+            LOG.debug("Websocket: run_forever() exited")
 
-            if not self.stop:
+            if self.stop or self.global_stop:
                 break
 
-        LOG.debug("---<[ websocket ]")
+            # liten backoff før reconnect
+            import time
+            time.sleep(5)
+
+        LOG.debug("---<[ websocket stopped ]")
         self.client.callback("WebSocketDisconnect", None)
+
+
+##        while not self.stop and not self.global_stop:
+# Ping interval 10  øket til 20 
+# La til ping_timeout=10,  manglet opprinnelig
+##            self.wsc.run_forever(ping_interval=20,ping_timeout=10, sslopt={"ca_certs": certifi.where()})
+##
+#            if not self.stop:
+#                break
+#  Endret kode    
+##            if not self.stop:
+##                import time
+##                time.sleep(5)
+##       LOG.debug("---<[ websocket ]")
+##        self.client.callback("WebSocketDisconnect", None)
 
     def on_error(self, ws, error):
         LOG.error(error)
@@ -84,8 +155,9 @@ class WSClient(threading.Thread):
         LOG.debug("--->[ websocket ] Got a ping! A pong reply has already been automatically sent.")
 
     def on_pong(self, ws, message):
-        LOG.debug("--->[ websocket ] Got a pong! Sending keepalive")
-        self.send("2")
+        LOG.debug("--->[ websocket ] Got a pong!")
+#        LOG.debug("--->[ websocket ] Got a pong! Sending keepalive")
+## Tatt vekk SE 14.05.2026        self.send("2")
 
     def on_message(self, ws, message):
         re_split = re.search("^(\\d+)(.*)$", message)
