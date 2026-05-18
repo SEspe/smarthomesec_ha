@@ -5,12 +5,17 @@ import logging
 import requests
 import hashlib
 import time
-from custom_components.smarthomesec.ws_client import WSClient
-import voluptuous as vol
-import async_timeout
+import json
+import threading
+
 
 from functools import partial
 from datetime import timedelta
+
+import voluptuous as vol
+import async_timeout
+
+from custom_components.smarthomesec.ws_client import WSClient
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
@@ -19,18 +24,22 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
-from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, API_BASEHOST, API_BASEPATH, TYPE_CLASS_BINARY_SENSOR, ALARM_AREAS
+from .const import (
+    DOMAIN,
+    API_BASEHOST,
+    API_BASEPATH,
+    TYPE_CLASS_BINARY_SENSOR,
+    ALARM_AREAS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,20 +62,19 @@ PLATFORMS: list[Platform] = [
 ]
 
 
-async def handle_async_init_result(hass: HomeAssistant, domain: str, conf: dict):
+async def handle_async_init_result(hass: HomeAssistant, domain: str, conf: dict) -> None:
     """Handle the result of the async_init to issue deprecated warnings."""
     flow = hass.config_entries.flow
     await flow.async_init(domain, context={"source": SOURCE_IMPORT}, data=conf)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the integration."""
+    """Set up the integration from YAML (legacy)."""
 
     if DOMAIN not in config:
         return True
 
     conf = config[DOMAIN]
-
     hass.async_create_task(handle_async_init_result(hass, DOMAIN, conf))
 
     return True
@@ -80,30 +88,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     try:
         coordinator = SmarthomesecCoordinator(hass, username, password)
-        
-        # ✅ gjør login først (i executor)
+
+        # Først login (blokkerende → executor)
         await hass.async_add_executor_job(coordinator.login)
 
-        # ✅ så refresh
+        # Så første refresh
         await coordinator.async_config_entry_first_refresh()
-# Org        await coordinator.async_config_entry_first_refresh()
 
-        partial_func = partial(coordinator.get_devices_by_type, TYPE_CLASS_BINARY_SENSOR)
-        binary_sensor_devices = await hass.async_add_executor_job(partial_func)
-        _LOGGER.debug(binary_sensor_devices)
+        # Hent binary sensors
+        binary_sensor_devices = await hass.async_add_executor_job(
+            partial(coordinator.get_devices_by_type, TYPE_CLASS_BINARY_SENSOR)
+        )
+        _LOGGER.debug("Binary sensor devices: %s", binary_sensor_devices)
 
-        partial_func = partial(coordinator.get_alarms, ALARM_AREAS)
-        alarm_areas = await hass.async_add_executor_job(partial_func)
-        _LOGGER.debug(alarm_areas)
+        # Hent alarmområder
+        alarm_areas = await hass.async_add_executor_job(
+            partial(coordinator.get_alarms, ALARM_AREAS)
+        )
+        _LOGGER.debug("Alarm areas: %s", alarm_areas)
 
     except Exception as ex:
-        _LOGGER.error("Failed to connect to SmartHomeSec: " + str(ex))
+        _LOGGER.error("Failed to connect to SmartHomeSec: %s", ex)
         return False
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id]["coordinator"] = coordinator
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id]["binary_sensor_devices"] = binary_sensor_devices
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id]["alarm_areas"] = alarm_areas
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+        "binary_sensor_devices": binary_sensor_devices,
+        "alarm_areas": alarm_areas,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -111,108 +124,139 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class SmarthomesecCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass, username, password):
+
+
+    def _update_device_types(self, status):
+        self._pir_devices = set()
+        self._door_devices = set()
+
+        for device in status["device_status"]:
+            device_id = device.get("device_id")
+            type_no = device.get("type_no")
+
+            if type_no == "9":
+                self._pir_devices.add(device_id)
+            elif type_no == "4":
+                self._door_devices.add(device_id)
+
+    def update_token(self, new_token):
+        _LOGGER.debug("Updating REST token → restarting WS client")
+
+        self.token = new_token
+
+        # Stopp gammel WSClient helt
+        if self.wsc is not None:
+            try:
+                self.wsc.stop_client()
+            except Exception:
+                pass
+            self.wsc = None
+
+        # Start WSClient på nytt, identisk med login()
+        # La til IF her.  Blir den kjørt flere ganger?
+        if self.wsc is None and self.token:
+            self.wsc = WSClient(self, self.token)
+            self.wsc.start()
+
+
+
+
+    def __init__(self, hass: HomeAssistant, username: str, password: str) -> None:
         super().__init__(
             hass,
             _LOGGER,
-            # Name of the data. For logging purposes.
             name="Smarthomesec",
-            # Polling interval. Will only be polled if there are subscribers.
             update_interval=timedelta(seconds=3600),
         )
 
-        """Initialize object."""
         self.hass = hass
         self.username = username
         self.password = password
-        self.token = None
-        self.userid = None
-        self.status = None
-        self.wsc = None
+        self.token: str | None = None
+        self.userid: str | None = None
+        self.status: dict | None = None
+        self.wsc: WSClient | None = None
 
     async def _async_update_data(self):
-        """Fetch data from API endpoint.
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
+        """Fetch data from API endpoint and normalize it."""
         try:
-            # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-            # handled by the data update coordinator.
-            ret = {}
-            ret["devices"] = {}
-            ret["alarms"] = {}
+            ret: dict = {"devices": {}, "alarms": {}}
+
             async with async_timeout.timeout(20):
                 status = await self.hass.async_add_executor_job(self.update_status)
+
                 for device in status["device_status"]:
                     device_id = device["device_id"]
                     ret["devices"][device_id] = device
+
                 for alarm in status["model"]:
                     area_id = alarm["area"]
                     ret["alarms"][str(area_id)] = alarm
+
                 return ret
 
         except Exception as err:
-#            raise UpdateFailed(f"Error communicating with API: {str(err)}")
             if isinstance(err, asyncio.TimeoutError):
                 _LOGGER.warning("Timeout from API – using last known data")
                 if self.last_update_success:
                     return self.data
-            raise UpdateFailed(f"Error communicating with API: {err}")
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
 
-
-
-
-
-
-    def login(self):
+    def login(self) -> None:
+        """Login to SmartHomeSec and start WebSocket client."""
 
         res = None
         try:
             payload = {
                 "account": self.username,
-                "password": hashlib.md5(self.password.encode('utf-8')).hexdigest(),
+                "password": hashlib.md5(self.password.encode("utf-8")).hexdigest(),
                 "pw_encrypted": "hashed",
-                "login_entry": "web"
+                "login_entry": "web",
             }
             headers = {
                 "cookie": "isPrivacy=1;",
                 "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
             }
 
-            res = requests.post(f'https://{API_BASEHOST}/{API_BASEPATH}/auth/login', data=payload, headers=headers)
+            res = requests.post(
+                f"https://{API_BASEHOST}/{API_BASEPATH}/auth/login",
+                data=payload,
+                headers=headers,
+                timeout=20,
+            )
 
             if res.status_code != 200:
                 raise Exception(f"Status: {res.status_code}")
         except Exception as ex:
-            raise Exception("Failed to connect to SmartHomeSec: " + str(ex))
+            raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
         try:
             json_dict = res.json()
             self.token = json_dict["token"]
             self.userid = json_dict["data"]["user_id"]
 
-            _LOGGER.debug(self.token)
-            _LOGGER.debug("Added a litte TOKEN  wait")
-            import time
-            time.sleep(2)
+            _LOGGER.debug("Token: %s", self.token)
+            _LOGGER.debug("Added a little TOKEN wait  10 sec")
+            time.sleep(10)
 
-            if self.wsc is None:
+#Byttet ut med delayed_ws_restart
+#            if self.wsc is None and self.token:
 #                self.wsc = WSClient(self, self.token)
-#                self.wsc.run_once(duration=15)
-#
-                self.wsc = WSClient(self, self.token)
-                self.wsc.start()
-            
+#                self.wsc.start()
+
+
+            _LOGGER.debug("Starting WS after login via delayed restart")
+            self.delayed_ws_restart(delay=2)
+
+
         except Exception as ex:
-            raise Exception("Failed to connect to SmartHomeSec: " + str(ex))
-        
-        _LOGGER.debug("Added a litte LOGIN wait")
-        import time
-        time.sleep(2)
+            raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
+
+        _LOGGER.debug("Added a little LOGIN wait  10 sec")
+#        time.sleep(2)
         _LOGGER.debug("Logged in")
 
-    def _rest_call_get(self, path):
+    def _rest_call_get(self, path: str):
         res = None
         status_code = 0
         loop = 0
@@ -229,38 +273,39 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 params = {
                     "_": round(time.time() * 1000),
                 }
-                res = requests.get(f'https://{API_BASEHOST}/{API_BASEPATH}/{path}', params=params, headers=headers)
-
+                res = requests.get(
+                    f"https://{API_BASEHOST}/{API_BASEPATH}/{path}",
+                    params=params,
+                    headers=headers,
+                    timeout=20,
+                )
 
             except Exception as ex:
-                raise Exception("Failed to connect to SmartHomeSec: " + str(ex))
+                raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
             status_code = res.status_code
             try:
                 if status_code == 401:
                     self.login()
                     loop += 1
-                    
             except Exception as ex:
-                raise Exception("Security error: " + str(ex))
+                raise Exception(f"Security error: {ex}") from ex
 
         if status_code != 200:
             raise Exception(f"Status: {res.status_code} / {self.token} / {self.userid}")
 
         try:
             json_dict = res.json()
-            # _LOGGER.debug(json_dict)
-
             return json_dict
         except Exception as ex:
-            raise Exception("Failed to connect to do a GET on SmartHomeSec: " + str(ex))
+            raise Exception(f"Failed to parse GET response from SmartHomeSec: {ex}") from ex
 
-    def _rest_call_post(self, path, payload):
+    def _rest_call_post(self, path: str, payload: dict):
         res = None
         status_code = 0
         loop = 0
 
-        _LOGGER.debug(f"set_alarm_mode: {payload}")
+        _LOGGER.debug("set_alarm_mode payload: %s", payload)
 
         if not self.token:
             self.login()
@@ -275,63 +320,83 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 params = {
                     "_": round(time.time() * 1000),
                 }
-                res = requests.post(f'https://{API_BASEHOST}/{API_BASEPATH}/{path}', params=params, headers=headers, data=payload)
 
-                _LOGGER.debug(res)
+                res = requests.post(
+                    f"https://{API_BASEHOST}/{API_BASEPATH}/{path}",
+                    params=params,
+                    headers=headers,
+                    data=payload,
+                    timeout=20,
+                )
 
+                _LOGGER.debug("POST response: %s", res)
 
             except Exception as ex:
-                raise Exception("Failed to connect to SmartHomeSec: " + str(ex))
+                raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
             status_code = res.status_code
+
             try:
                 if status_code == 401:
                     self.login()
                     loop += 1
                     continue
-                elif status_code == 400:
+                if status_code == 400:
                     raise Exception("Security error")
             except Exception as ex:
-                raise Exception("Security error: " + str(ex))
+                raise Exception(f"Security error: {ex}") from ex
 
             if status_code != 200:
-                _LOGGER.error(f"Status: {res.status_code} / {self.token} / {self.userid} / {res.json()}")
-                raise Exception(f"Status: {res.status_code} / {self.token} / {self.userid}")
+                _LOGGER.error(
+                    "Status: %s / %s / %s / %s",
+                    res.status_code,
+                    self.token,
+                    self.userid,
+                    res.json(),
+                )
+                raise Exception(
+                    f"Status: {res.status_code} / {self.token} / {self.userid}"
+                )
 
+        # -----------------------------
+        # PARSE JSON + TOKEN SYNC
+        # -----------------------------
         try:
             json_dict = res.json()
-            _LOGGER.debug(json_dict)
+            _LOGGER.debug("POST JSON: %s", json_dict)
+
+            # 🔥 TOKEN SYNC – oppdater WS-token hvis API returnerer nytt token
+            new_token = json_dict.get("token")
+            if new_token and new_token != self.token:
+                _LOGGER.debug("REST returned new token → updating WS token")
+                self.update_token(new_token)
+
             return json_dict
+
         except Exception as ex:
-            raise Exception("Failed to connect to do a GET on SmartHomeSec: " + str(ex))
+            raise Exception(f"Failed to parse POST response from SmartHomeSec: {ex}") from ex
 
-#    def update_status(self):
-#        self.status = self._rest_call_get("panel/cycle")
-#        _LOGGER.debug("Retrieveing devices status")
-#        return self.status["data"]
-#
-#    modded with retry
     def update_status(self):
-        import time
-
+        """Retrieve full status with retry."""
         for attempt in range(3):
             try:
                 self.status = self._rest_call_get("panel/cycle")
-                _LOGGER.debug("Retrieveing devices status")
+                self._update_device_types(self.status["data"])
+                _LOGGER.debug("Retrieving devices status")
                 return self.status["data"]
             except Exception as e:
                 if attempt < 2:
                     _LOGGER.debug("Retrying update_status (%s/3)...", attempt + 2)
-                    time.sleep(1)  # ✅ liten pause før retry
+                    time.sleep(1)
                 else:
                     _LOGGER.error("update_status failed after retries: %s", e)
                     raise
+
     def get_devices_by_type(self, types):
         devices = []
         for device in self.status["data"]["device_status"]:
             if device["type"] in types:
                 devices.append(device)
-        
         return devices
 
     def get_alarms(self, areas):
@@ -339,7 +404,6 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         for alarm in self.status["data"]["model"]:
             if alarm["area"] in areas:
                 alarms.append(alarm)
-        
         return alarms
 
     def set_alarm_mode(self, area, mode, pin):
@@ -347,82 +411,254 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             "area": int(area),
             "pincode": int(pin),
             "mode": mode,
-            "format": 1
+            "format": 1,
         }
         _LOGGER.debug("set_alarm_mode")
         self._rest_call_post("panel/mode", payload)
-            # liten pause før refresh
+
         time.sleep(1)
 
         asyncio.run_coroutine_threadsafe(
             self.async_request_refresh(),
-            self.hass.loop
+            self.hass.loop,
         )
 
+
+
+    def _set_pir_active(self, device_id):
+        if not hasattr(self, "_pir_state"):
+            self._pir_state = {}
+
+        self._pir_state[device_id] = True
+
+        def reset():
+            time.sleep(5)
+            self._pir_state[device_id] = False
+            asyncio.run_coroutine_threadsafe(
+                self.async_request_refresh(),
+                self.hass.loop,
+            )
+
+        threading.Thread(target=reset, daemon=True).start()
+
+        asyncio.run_coroutine_threadsafe(
+            self.async_request_refresh(),
+            self.hass.loop,
+        )
+
+
+#    def delayed_ws_restart(self, delay=20):
+#  Øke delay til fra 6 til 30 sec
+#        time.sleep(30)
+#        if self.token and self.wsc is None:
+#            _LOGGER.debug("Retrying WS with existing token")
+#            self.wsc = WSClient(self, self.token)
+#            self.wsc.start()
+#            threading.Thread(target=delayed_ws_restart, daemon=True).start()
+#        return
+    def delayed_ws_restart(self, delay=20):
+        """Restart WS etter delay (kjøres i egen tråd)."""
+
+        def _restart():
+            _LOGGER.debug("WS restart scheduled in %s seconds", delay)
+            time.sleep(delay)
+
+            if self.token:
+                _LOGGER.debug("Retrying WS with existing token")
+
+                try:
+                    if self.wsc:
+                        self.wsc.stop_client()
+                except Exception:
+                    pass
+
+                self.wsc = None
+
+                try:
+                    self.wsc = WSClient(self, self.token)
+                    self.wsc.start()
+                except Exception as e:
+                    _LOGGER.error("Failed to restart WS: %s", e)
+
+        threading.Thread(target=_restart, daemon=True).start()
+
     def callback(self, message, data):
+        # 🔥 Token error → tving full login
+#        if message == "44" or ("check token error" in str(data)):
+#            _LOGGER.warning("WS token not ready – retrying with delay")
+#
+#            # ✅ stopp WS
+#            try:
+#                if self.wsc:
+#                    self.wsc.stop_client()
+#            except:
+#                pass
+#            self.wsc = None
+
+#            # ✅ IKKE login
+#            # ✅ bare vent og prøv WS igjen
+
+
+        # ----------------------------------------
+        # ✅ RESET token error når WS faktisk connecter
+        # ----------------------------------------
+# flyttet til først 42 event
+#        if message == "WebSocketConnect":
+#            _LOGGER.debug("WS connected → reset token error counter")
+#            self._ws_token_errors = 0
+#            return
+
+
+
+        if message == "44" or ("check token error" in str(data)):
+
+            # 🔢 init teller hvis ikke finnes
+            if not hasattr(self, "_ws_token_errors"):
+                self._ws_token_errors = 0
+
+            self._ws_token_errors += 1
+
+            _LOGGER.warning(
+                "WS token error (%s) – handling...", self._ws_token_errors
+            )
+
+            # ✅ stopp WS
+            try:
+                if self.wsc:
+                    self.wsc.stop_client()
+            except Exception:
+                pass
+
+            self.wsc = None
+
+            # --------------------------------------------------
+            # 🔥 LOGIKK
+            # --------------------------------------------------
+
+            if self._ws_token_errors >= 2:
+                # ❗ token er mest sannsynlig invalid → hent ny
+                _LOGGER.warning("Too many token errors → forcing login")
+
+                self._ws_token_errors = 0
+
+                try:
+                    self.login()
+                except Exception as e:
+                    _LOGGER.error("Login failed after token error: %s", e)
+
+            else:
+                # ✅ første gang → gi backend tid
+                _LOGGER.warning("WS token not ready – retrying with delay")
+
+                try:
+                    self.delayed_ws_restart()
+                except Exception as e:
+                    _LOGGER.error("Delayed WS restart failed: %s", e)
+
+
+
 
         if message == "WebSocketDisconnect":
-            self.wsc.stop_client()
+
+            _LOGGER.warning("WS disconnected")
+
+            try:
+                if self.wsc:
+                    self.wsc.stop_client()
+            except:
+                pass
+
             self.wsc = None
-            _LOGGER.warning("WS disconnected – restarting")
-            self.wsc = WSClient(self, self.token)
-            self.wsc.start()
+
+            # ✅ IKKE restart her
+            # La token-handleren eller WSClient gjøre det
+
             return
 
+
+        if message == "ForceLogin":
+            _LOGGER.warning("WS silent → forcing full login()")
+            self.token = None
+            try:
+                self.wsc.stop_client()
+            except:
+                pass
+            self.wsc = None
+            self.login()
+            return
+
+
+        # Socket.IO ping
         if message == "3":
             return
 
-        #
-        # 🔥 Socket.IO event (42)
-        #
+        # Socket.IO event
         if message == "42":
+            _LOGGER.debug("WS RAW: %s", data)
 
-            # Først: logg rådata (som i din gamle versjon)
-            _LOGGER.debug("Callback : %s / %s", message, data)
-            _LOGGER.info("WS EVENT RAW: %s", data)
 
-            # Parse event
+            # ✅ WS er faktisk OK nå
+            if hasattr(self, "_ws_token_errors"):
+                if self._ws_token_errors != 0:
+                    _LOGGER.debug("WS healthy → reset token error counter")
+                self._ws_token_errors = 0
+
+
+
+            #
+            # Parse SmartHomeSec format:
+            # 42["token","{\"refreshed_type\":\"DEVICE_STATUS\",\"data\":{...}}"]
+            #
             try:
-                outer = json.loads(data)          # ["token","{json}"]
-                inner = json.loads(outer[1])      # {"refreshed_type": "...", ...}
-                event_type = inner.get("refreshed_type")
-                event_data = inner.get("data", {})
-            except Exception:
-                _LOGGER.warning("WS: failed to parse event: %s", data)
-                # fallback: gjør vanlig refresh
+                outer = json.loads(data)          # ["token", "{json}"]
+                inner = json.loads(outer[1])      # {"refreshed_type": "...", "data": {...}}
+            except Exception as e:
+                _LOGGER.warning("WS parse error: %s", e)
                 asyncio.run_coroutine_threadsafe(
                     self.async_request_refresh(),
                     self.hass.loop
                 )
                 return
 
-            _LOGGER.info("WS EVENT: type=%s data=%s", event_type, event_data)
+            event_type = inner.get("refreshed_type")
+            event_data = inner.get("data", {})
+
+            _LOGGER.debug("WS EVENT: %s | %s", event_type, event_data)
 
             #
-            # 🔥 DEVICE_STATUS (dør, PIR, etc.)
+            # 🔥 DEVICE_STATUS → dør åpen/lukket
             #
             if event_type == "DEVICE_STATUS":
-                # Første refresh
+
+#           Hent ut device typer
+                device_id = event_data.get("device_id")
+                if device_id in getattr(self, "_pir_devices", set()):
+                    _LOGGER.debug("PIR triggered: %s", device_id)
+                    self._set_pir_active(device_id)
+
+
+                _LOGGER.debug("DEVICE STATUS FULL: %s", self.status)
+                # Umiddelbar refresh
                 asyncio.run_coroutine_threadsafe(
                     self.async_request_refresh(),
                     self.hass.loop
                 )
 
-                # Liten delay før REST har riktig status
-                import threading
+
+
+                # Liten delay for å hente riktig REST-status
                 def delayed_refresh():
-                    import time
                     time.sleep(0.5)
                     asyncio.run_coroutine_threadsafe(
                         self.async_request_refresh(),
                         self.hass.loop
                     )
 
-                threading.Thread(target=delayed_refresh).start()
+                threading.Thread(target=delayed_refresh, daemon=True).start()
                 return
 
             #
-            # 🔥 MODE_CHANGE (alarmstatus endret via annen enhet)
+            # 🔥 MODE_CHANGE → alarmstatus endret
             #
             if event_type == "MODE_CHANGE":
                 asyncio.run_coroutine_threadsafe(
@@ -432,7 +668,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 return
 
             #
-            # 🔥 REPORT (generelle endringer)
+            # 🔥 REPORT → generelle endringer
             #
             if event_type == "REPORT":
                 asyncio.run_coroutine_threadsafe(
@@ -442,7 +678,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 return
 
             #
-            # 🔥 Fallback for ukjente eventer
+            # Fallback for ukjente eventer
             #
             asyncio.run_coroutine_threadsafe(
                 self.async_request_refresh(),
