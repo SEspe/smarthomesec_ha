@@ -17,6 +17,18 @@ LOG = logging.getLogger(__name__)
 # Demp støy fra websocket-biblioteket
 logging.getLogger("websocket").setLevel(logging.CRITICAL)
 
+# Engine.IO heartbeat.
+#
+# Serveren venter at KLIENTEN sender PING ("2"); den svarer med PONG ("3").
+# Dette er EIO v3-semantikk selv om URL-en sier EIO=4 – verifisert mot
+# smartalarm.alarm24.no: uten heartbeat lukker serveren forbindelsen etter
+# nøyaktig pingInterval + pingTimeout (25s + 5s = 30s), hver gang.
+#
+# Fallback hvis handshake ikke oppgir pingInterval.
+DEFAULT_PING_INTERVAL = 25.0
+# Send i god tid før serverens frist – 80 % av intervallet.
+PING_MARGIN = 0.8
+
 
 class WSClient(threading.Thread):
     """WebSocket client for SmartHomeSec (Socket.IO EIO=4)."""
@@ -40,7 +52,52 @@ class WSClient(threading.Thread):
         self._last_connect = time.time()
         self._last_event = time.time()
 
+        # Heartbeat – settes opp på nytt for hver tilkobling.
+        self._hb_stop: threading.Event | None = None
+
         super().__init__(daemon=True)
+
+    # ----------------------------------------------------------------------
+    # HEARTBEAT
+    # ----------------------------------------------------------------------
+
+    def _start_heartbeat(self, ws, interval: float) -> None:
+        """Send Engine.IO PING ("2") hvert `interval` sekund til denne ws-en."""
+        self._stop_heartbeat()
+
+        stop = threading.Event()
+        self._hb_stop = stop
+
+        def _beat():
+            while not stop.wait(interval):
+                try:
+                    ws.send("2")
+                    LOG.debug("Sent Engine.IO PING (2)")
+                except Exception as ex:
+                    # Forbindelsen er borte – run_forever håndterer reconnect.
+                    LOG.debug("Heartbeat stopped: %s", ex)
+                    return
+
+        threading.Thread(target=_beat, daemon=True, name="shs-ws-heartbeat").start()
+
+    def _stop_heartbeat(self) -> None:
+        if self._hb_stop is not None:
+            self._hb_stop.set()
+            self._hb_stop = None
+
+    def _handle_handshake(self, ws, content: str) -> None:
+        """Les pingInterval fra Engine.IO-handshake og start heartbeat."""
+        interval = DEFAULT_PING_INTERVAL
+        try:
+            ping_ms = json.loads(content).get("pingInterval")
+            if ping_ms:
+                interval = ping_ms / 1000.0
+        except Exception as ex:
+            LOG.debug("Could not parse handshake (%s) – using default", ex)
+
+        interval *= PING_MARGIN
+        LOG.debug("Engine.IO handshake – sending PING every %.1fs", interval)
+        self._start_heartbeat(ws, interval)
 
     # ----------------------------------------------------------------------
     # PUBLIC API
@@ -55,6 +112,7 @@ class WSClient(threading.Thread):
 
         self.stop = True
         self.global_stop = True
+        self._stop_heartbeat()
 
         if self.wsc is not None:
             try:
@@ -112,6 +170,9 @@ class WSClient(threading.Thread):
             )
 
             LOG.debug("WebSocket: run_forever() exited")
+
+            # Heartbeat hører til forbindelsen som nettopp døde.
+            self._stop_heartbeat()
 
             if self.stop:
                 break
@@ -212,6 +273,19 @@ class WSClient(threading.Thread):
 
         code = match.group(1)
         content = match.group(2)
+
+        if code == "0":
+            # Engine.IO OPEN – serveren oppgir sine pingInterval/pingTimeout.
+            self._handle_handshake(ws, content)
+
+        elif code == "2":
+            # Serveren pinger oss (ikke observert mot alarm24, men billig å
+            # støtte): PING skal alltid besvares med PONG.
+            try:
+                ws.send("3")
+                LOG.debug("Answered server PING with PONG (3)")
+            except Exception as ex:
+                LOG.debug("Failed to send PONG: %s", ex)
 
         if code == "42":
             # 42 = faktisk event (dør, PIR, mode change osv.)
