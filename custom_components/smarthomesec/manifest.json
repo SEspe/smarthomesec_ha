@@ -7,6 +7,6 @@
   "documentation": "https://github.com/SEspe/smarthomesec_ha",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/SEspe/smarthomesec_ha/issues",
-  "requirements": [],
-  "version": "0.1.2"
+  "requirements": ["websocket-client==1.9.0"],
+  "version": "0.1.3"
 }

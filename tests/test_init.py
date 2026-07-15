@@ -90,6 +90,33 @@ async def test_startup_banner_survives_missing_version(hass, caplog):
     assert "Version: unknown" in caplog.text
 
 
+def test_manifest_declares_websocket_client_matching_the_test_pin():
+    """HA does not ship websocket-client, so the manifest must declare it.
+
+    The manifest pin and requirements_test.txt pin must agree, otherwise CI
+    validates a different version than Home Assistant installs.
+    """
+    root = Path(__file__).parents[1]
+    manifest = json.loads((root / MANIFEST_PATH).read_text(encoding="utf-8"))
+
+    manifest_pins = [
+        r for r in manifest["requirements"] if r.startswith("websocket-client")
+    ]
+    assert manifest_pins, "manifest.json must declare websocket-client"
+
+    test_reqs = (root / "requirements_test.txt").read_text(encoding="utf-8")
+    test_pins = [
+        line.strip()
+        for line in test_reqs.splitlines()
+        if line.strip().startswith("websocket-client")
+    ]
+
+    assert test_pins == manifest_pins, (
+        f"manifest.json pins {manifest_pins} but requirements_test.txt pins "
+        f"{test_pins} -- keep them in sync"
+    )
+
+
 def test_stop_ws_stops_and_joins_the_thread():
     coord = object.__new__(SmarthomesecCoordinator)
     coord._shutdown = False

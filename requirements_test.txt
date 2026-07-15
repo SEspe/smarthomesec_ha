@@ -4,6 +4,7 @@
 pytest-homeassistant-custom-component
 pytest-cov
 
-# Declared in the integration's runtime imports but missing from manifest.json's
-# "requirements"; needed here so ws_client.py can be imported under test.
-websocket-client
+# Runtime dependency of the integration. Home Assistant does NOT ship this, so
+# it is declared in manifest.json "requirements" -- keep this pin in sync with
+# the manifest so CI tests the exact version HA will install.
+websocket-client==1.9.0
