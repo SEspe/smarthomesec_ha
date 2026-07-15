@@ -24,5 +24,12 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # This integration is not registered in home-assistant/brands.
-          ignore: brands
+          # These are checks for inclusion in the HACS *default store*, which
+          # this fork is not submitted to (upstream koying fails them too).
+          # The useful checks -- hacs.json schema and integration manifest --
+          # still run.
+          #   brands  - not registered in home-assistant/brands
+          #   topics  - no GitHub repo topics set
+          #   license - no LICENSE (upstream has none either)
+          #   issues  - Issues disabled on the fork
+          ignore: brands topics license issues

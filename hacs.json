@@ -1,6 +1,5 @@
 {
   "name": "SmartHomeSec",
-  "domains": ["smarthomesec"],
   "homeassistant": "2024.5.0",
   "country": ["NO"]
 }
