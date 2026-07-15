@@ -170,6 +170,73 @@ def test_delayed_ws_restart_not_scheduled_after_shutdown():
     assert coord.wsc is None
 
 
+def _login_coordinator():
+    """A coordinator with just the attributes login() reads."""
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord._shutdown = False
+    coord.username = "user"
+    coord.password = "secret"
+    coord.token = "old-token"
+    coord.userid = None
+    coord.wsc = None
+    return coord
+
+
+def _login_response():
+    res = MagicMock()
+    res.status_code = 200
+    res.json.return_value = {"token": "new-token", "data": {"user_id": "42"}}
+    return res
+
+
+def test_login_from_rest_401_refreshes_token_without_touching_ws():
+    """The REST token has a ~5min TTL; the WS only presents its token at connect.
+
+    So a 401-triggered re-login must leave a healthy WS alone — restarting it
+    was the cause of the ~10min reconnect churn.
+    """
+    coord = _login_coordinator()
+    wsc = MagicMock()
+    coord.wsc = wsc
+
+    with patch(
+        "custom_components.smarthomesec.requests.post", return_value=_login_response()
+    ), patch.object(SmarthomesecCoordinator, "delayed_ws_restart") as mock_restart:
+        coord.login(restart_ws=False)
+
+    mock_restart.assert_not_called()
+    wsc.stop_client.assert_not_called()
+    assert coord.wsc is wsc  # same live connection
+    assert coord.token == "new-token"
+
+
+def test_login_restarts_ws_by_default():
+    """Setup, token errors and ForceLogin all rely on login() bringing the WS up."""
+    coord = _login_coordinator()
+
+    with patch(
+        "custom_components.smarthomesec.requests.post", return_value=_login_response()
+    ), patch.object(SmarthomesecCoordinator, "delayed_ws_restart") as mock_restart:
+        coord.login()
+
+    mock_restart.assert_called_once_with(delay=2)
+    assert coord.token == "new-token"
+
+
+def test_login_does_not_sleep():
+    """login() runs inside _async_update_data's 20s timeout – no sleeping in it."""
+    coord = _login_coordinator()
+
+    with patch(
+        "custom_components.smarthomesec.requests.post", return_value=_login_response()
+    ), patch.object(SmarthomesecCoordinator, "delayed_ws_restart"), patch(
+        "custom_components.smarthomesec.time.sleep"
+    ) as mock_sleep:
+        coord.login()
+
+    mock_sleep.assert_not_called()
+
+
 def test_update_token_ignored_after_shutdown():
     """A late REST token rotation must not resurrect the WS client."""
     coord = object.__new__(SmarthomesecCoordinator)
