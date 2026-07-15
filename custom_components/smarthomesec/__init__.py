@@ -285,8 +285,14 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     return self.data
             raise UpdateFailed(f"Error communicating with API: {err}") from err
 
-    def login(self) -> None:
-        """Login to SmartHomeSec and start WebSocket client."""
+    def login(self, restart_ws: bool = True) -> None:
+        """Login to SmartHomeSec and (optionally) restart the WebSocket client.
+
+        REST-tokenet har ~5 min TTL, mens WS-tokenet bare presenteres ved connect
+        – en levende WS bryr seg ikke om at REST-tokenet rulleres. Derfor kaller
+        401-retry i _rest_call_get/_rest_call_post med restart_ws=False: de
+        trenger bare et friskt token, og skal ikke rive ned en frisk WS.
+        """
 
         res = None
         try:
@@ -319,24 +325,16 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             self.userid = json_dict["data"]["user_id"]
 
             _LOGGER.debug("Token: %s", self.token)
-            _LOGGER.debug("Added a little TOKEN wait  10 sec")
-            time.sleep(10)
 
-#Byttet ut med delayed_ws_restart
-#            if self.wsc is None and self.token:
-#                self.wsc = WSClient(self, self.token)
-#                self.wsc.start()
-
-
-            _LOGGER.debug("Starting WS after login via delayed restart")
-            self.delayed_ws_restart(delay=2)
-
+            if restart_ws:
+                _LOGGER.debug("Starting WS after login via delayed restart")
+                self.delayed_ws_restart(delay=2)
+            else:
+                _LOGGER.debug("Token refreshed for REST – leaving WS untouched")
 
         except Exception as ex:
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
-        _LOGGER.debug("Added a little LOGIN wait  10 sec")
-#        time.sleep(2)
         _LOGGER.debug("Logged in")
 
     def _rest_call_get(self, path: str):
@@ -369,7 +367,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             status_code = res.status_code
             try:
                 if status_code == 401:
-                    self.login()
+                    # Kun nytt REST-token – WS lever videre på sitt eget token.
+                    self.login(restart_ws=False)
                     loop += 1
             except Exception as ex:
                 raise Exception(f"Security error: {ex}") from ex
@@ -421,7 +420,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
             try:
                 if status_code == 401:
-                    self.login()
+                    # Kun nytt REST-token – WS lever videre på sitt eget token.
+                    self.login(restart_ws=False)
                     loop += 1
                     continue
                 if status_code == 400:
