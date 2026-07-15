@@ -7,6 +7,20 @@ DOMAIN = "smarthomesec"
 
 INTEGRATION_TITLE = "SmartHomeSec"
 
+ISSUE_URL = "https://github.com/SEspe/smarthomesec_ha/issues"
+
+# Logges én gang ved oppstart. Versjonen hentes fra manifest.json i runtime
+# (via async_get_integration), slik at den ikke kan komme ut av synk her.
+STARTUP_MESSAGE = """
+-------------------------------------------------------------------
+%s
+Version: %s
+This is a custom integration!
+If you have any issues with this you need to open an issue here:
+%s
+-------------------------------------------------------------------
+"""
+
 #API_BASEHOST = "smarthomesec.bydemes.com"
 # Norwegian provider...
 API_BASEHOST = "smartalarm.alarm24.no/"

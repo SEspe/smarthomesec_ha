@@ -33,10 +33,15 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from homeassistant.loader import async_get_integration
+
 from .const import (
     DOMAIN,
     API_BASEHOST,
     API_BASEPATH,
+    INTEGRATION_TITLE,
+    ISSUE_URL,
+    STARTUP_MESSAGE,
     TYPE_CLASS_BINARY_SENSOR,
     ALARM_AREAS,
 )
@@ -83,8 +88,24 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def _async_log_startup_message(hass: HomeAssistant) -> None:
+    """Logg oppstartsbanner én gang – versjon leses fra manifest.json."""
+    if DOMAIN in hass.data:
+        return
+
+    try:
+        version = (await async_get_integration(hass, DOMAIN)).version
+    except Exception:  # pylint: disable=broad-except
+        # Banneret er kun informativt – det skal aldri stoppe oppsettet.
+        version = "unknown"
+
+    _LOGGER.info(STARTUP_MESSAGE, INTEGRATION_TITLE, version, ISSUE_URL)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
+
+    await _async_log_startup_message(hass)
 
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
