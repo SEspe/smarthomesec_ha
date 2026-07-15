@@ -1,0 +1,9 @@
+# Test dependencies for the SmartHomeSec Home Assistant integration.
+# Home Assistant itself (plus requests/certifi) is pulled in transitively by
+# pytest-homeassistant-custom-component, which pins a matching HA version.
+pytest-homeassistant-custom-component
+pytest-cov
+
+# Declared in the integration's runtime imports but missing from manifest.json's
+# "requirements"; needed here so ws_client.py can be imported under test.
+websocket-client

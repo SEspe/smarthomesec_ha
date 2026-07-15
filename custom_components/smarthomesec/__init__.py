@@ -61,6 +61,9 @@ PLATFORMS: list[Platform] = [
     Platform.ALARM_CONTROL_PANEL,
 ]
 
+# Hvor lenge vi venter på at WS-tråden avslutter ved unload.
+WS_THREAD_JOIN_TIMEOUT = 10
+
 
 async def handle_async_init_result(hass: HomeAssistant, domain: str, conf: dict) -> None:
     """Handle the result of the async_init to issue deprecated warnings."""
@@ -123,6 +126,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry and stop the WebSocket thread it owns.
+
+    Without this, the WSClient thread outlives the entry: a reload leaves the old
+    thread reconnecting with a stale token alongside the new one, and the two race
+    over the shared token/error state.
+    """
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if not unload_ok:
+        return False
+
+    domain_data = hass.data.get(DOMAIN, {})
+    data = domain_data.pop(entry.entry_id, None)
+
+    if data is not None:
+        # Blocking (closes the socket and joins the thread) → run in executor.
+        await hass.async_add_executor_job(data["coordinator"].stop_ws)
+
+    if not domain_data:
+        hass.data.pop(DOMAIN, None)
+
+    return True
+
+
 class SmarthomesecCoordinator(DataUpdateCoordinator):
 
 
@@ -139,8 +167,41 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             elif type_no == "4":
                 self._door_devices.add(device_id)
 
+    def stop_ws(self) -> None:
+        """Stopp WS-klienten og vent på at tråden avslutter.
+
+        Blokkerende (join) – må kjøres i executor, aldri på event-loopen.
+        Setter _shutdown slik at pending delayed_ws_restart ikke gjenoppliver
+        tråden etter unload.
+        """
+        self._shutdown = True
+
+        wsc = self.wsc
+        self.wsc = None
+
+        if wsc is None:
+            return
+
+        try:
+            wsc.stop_client()
+        except Exception as ex:
+            _LOGGER.debug("Error while stopping WS client: %s", ex)
+
+        wsc.join(timeout=WS_THREAD_JOIN_TIMEOUT)
+
+        if wsc.is_alive():
+            _LOGGER.warning(
+                "WS thread still alive %ss after stop request", WS_THREAD_JOIN_TIMEOUT
+            )
+        else:
+            _LOGGER.debug("WS thread stopped")
+
     def update_token(self, new_token):
         _LOGGER.debug("Updating REST token → restarting WS client")
+
+        if self._shutdown:
+            _LOGGER.debug("Ignoring token update – entry is unloading")
+            return
 
         self.token = new_token
 
@@ -176,6 +237,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         self.userid: str | None = None
         self.status: dict | None = None
         self.wsc: WSClient | None = None
+        self._shutdown: bool = False
 
     async def _async_update_data(self):
         """Fetch data from API endpoint and normalize it."""
@@ -459,9 +521,17 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
     def delayed_ws_restart(self, delay=20):
         """Restart WS etter delay (kjøres i egen tråd)."""
 
+        if self._shutdown:
+            _LOGGER.debug("WS restart not scheduled – entry is unloading")
+            return
+
         def _restart():
             _LOGGER.debug("WS restart scheduled in %s seconds", delay)
             time.sleep(delay)
+
+            if self._shutdown:
+                _LOGGER.debug("WS restart aborted – entry was unloaded")
+                return
 
             if self.token:
                 _LOGGER.debug("Retrying WS with existing token")

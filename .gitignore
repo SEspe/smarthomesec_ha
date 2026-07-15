@@ -3,3 +3,17 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Virtualenvs
+.venv/
+venv/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local-only working notes — never push these
+CLAUDE.md
+SESSION_NOTES.md
+.claude/
