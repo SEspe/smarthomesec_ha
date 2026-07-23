@@ -1,4 +1,4 @@
-# SMartHomeSec
+# SmartHomeSec
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
@@ -10,7 +10,7 @@ Under HACS -> Integrations, add custom repository "https://github.com/SEspe/smar
 
 Search for repository "smarthomesec_ha" and download it. Restart Home Assistant.
 
-Go to Settings > Integrations and Add Integration "SMartHomeSec". Type in xxx
+Go to Settings > Integrations and Add Integration "SmartHomeSec". Type in xxx
 
 Click Configure and choose fractions to create sensors.
 
