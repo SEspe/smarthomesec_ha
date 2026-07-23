@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from custom_components.smarthomesec.ws_client import (
     DEFAULT_PING_INTERVAL,
     PING_MARGIN,
+    SERVER_PING_GRACE,
     WSClient,
 )
 
@@ -54,46 +55,99 @@ def test_unparseable_frame_is_ignored():
 
 
 # ----------------------------------------------------------------------
-# Engine.IO heartbeat
+# Engine.IO heartbeat – two server dialects (see ws_client.py module top).
 #
-# Verified against smartalarm.alarm24.no: the server expects the CLIENT to
-# send PING ("2") and answers with PONG ("3"). Without it the server closes
-# the connection after pingInterval + pingTimeout (25s + 5s) exactly.
+# Vesta (portal.vestasecurity.eu) is strict Engine.IO v4: the SERVER pings and
+# the client only PONGs. alarm24 is v3: the server never pings and the CLIENT
+# must ping, or it is closed at pingInterval + pingTimeout. So on handshake we
+# do NOT ping immediately -- we schedule a fallback and wait to see whether the
+# server pings first.
 # ----------------------------------------------------------------------
 
 
-def test_handshake_starts_heartbeat_at_server_interval():
-    """The ping period comes from the server's own pingInterval, with margin."""
+def _fire_fallback(ws):
+    """Invoke the scheduled fallback synchronously, as its timer would."""
+    timer = ws._hb_fallback
+    assert timer is not None, "handshake should have scheduled a fallback timer"
+    timer.cancel()  # don't let the real timer also fire
+    timer.function(*timer.args)
+
+
+def test_handshake_does_not_ping_immediately():
+    """v4 servers (Vesta) close on a client PING; handshake must stay silent."""
+    _, ws = _client()
+    ws._start_heartbeat = MagicMock()
+    sock = MagicMock()
+
+    ws._on_message(sock, "0" + HANDSHAKE)
+
+    ws._start_heartbeat.assert_not_called()
+    sock.send.assert_not_called()  # no "2" on the wire yet
+    ws._stop_heartbeat()  # cancel the pending timer
+
+
+def test_handshake_schedules_fallback_between_serverping_and_close():
+    """The fallback must fire after the server's PING but before a v3 close."""
+    _, ws = _client()
+
+    ws._on_message(MagicMock(), "0" + HANDSHAKE)  # pingInterval 25s, pingTimeout 5s
+
+    timer = ws._hb_fallback
+    assert timer is not None
+    assert timer.interval == 25.0 + SERVER_PING_GRACE  # 27s
+    assert 25.0 < timer.interval < 30.0, "between server PING (25s) and v3 close (30s)"
+    assert timer.args[1] == 25.0 * PING_MARGIN  # beat interval handed to the fallback
+    ws._stop_heartbeat()
+
+
+def test_server_ping_suppresses_client_fallback():
+    """If the server pings first (v4), the fallback must NOT client-ping."""
     _, ws = _client()
     ws._start_heartbeat = MagicMock()
 
     ws._on_message(MagicMock(), "0" + HANDSHAKE)
+    ws._on_message(MagicMock(), "2")  # server PING arrives before the grace elapses
+    assert ws._server_drives_hb is True
 
-    ws._start_heartbeat.assert_called_once()
-    interval = ws._start_heartbeat.call_args[0][1]
-    assert interval == 25.0 * PING_MARGIN  # 20s -- comfortably under the 25s deadline
-    assert interval < 25.0, "must ping before the server's deadline"
+    _fire_fallback(ws)
+
+    ws._start_heartbeat.assert_not_called()
 
 
-def test_handshake_without_ping_interval_falls_back():
+def test_no_server_ping_falls_back_to_client_ping():
+    """v3 (alarm24): no server PING, so the fallback drives the heartbeat."""
     _, ws = _client()
     ws._start_heartbeat = MagicMock()
+    sock = MagicMock()
+
+    ws._on_message(sock, "0" + HANDSHAKE)
+    _fire_fallback(ws)
+
+    sock.send.assert_any_call("2")  # an immediate first PING before the deadline
+    ws._start_heartbeat.assert_called_once()
+    assert ws._start_heartbeat.call_args[0][1] == 25.0 * PING_MARGIN
+
+
+def test_handshake_without_ping_interval_falls_back_to_default():
+    _, ws = _client()
 
     ws._on_message(MagicMock(), '0{"sid":"abc"}')
 
-    interval = ws._start_heartbeat.call_args[0][1]
-    assert interval == DEFAULT_PING_INTERVAL * PING_MARGIN
+    timer = ws._hb_fallback
+    assert timer is not None
+    assert timer.args[1] == DEFAULT_PING_INTERVAL * PING_MARGIN
+    ws._stop_heartbeat()
 
 
-def test_unparseable_handshake_still_starts_heartbeat():
-    """A malformed handshake must not leave us silent and get us disconnected."""
+def test_unparseable_handshake_still_schedules_fallback():
+    """A malformed handshake must not leave us without any heartbeat plan."""
     _, ws = _client()
-    ws._start_heartbeat = MagicMock()
 
     ws._on_message(MagicMock(), "0not-json")
 
-    ws._start_heartbeat.assert_called_once()
-    assert ws._start_heartbeat.call_args[0][1] == DEFAULT_PING_INTERVAL * PING_MARGIN
+    assert ws._hb_fallback is not None
+    assert ws._hb_fallback.args[1] == DEFAULT_PING_INTERVAL * PING_MARGIN
+    ws._stop_heartbeat()
 
 
 def test_heartbeat_actually_sends_engineio_ping():
