@@ -22,8 +22,14 @@ If you have any issues with this you need to open an issue here:
 """
 
 #API_BASEHOST = "smarthomesec.bydemes.com"
-# Norwegian provider...
-API_BASEHOST = "smartalarm.alarm24.no/"
+# Norwegian provider, classic SmartHomeSec tenant (old app / old accounts):
+#API_BASEHOST = "smartalarm.alarm24.no"
+# Vesta tenant – the new Android app provisions accounts here. Same Climax
+# backend/IP as alarm24, but a separate account database selected by hostname,
+# so alarm24 credentials and vesta credentials are NOT interchangeable.
+# Verified 2026-07-23: login with the app's email + md5 password succeeds here
+# and returns a token, while alarm24 rejects the same account with code 010.
+API_BASEHOST = "portal.vestasecurity.eu"
 
 API_BASEPATH = "REST/v2"
 
