@@ -17,17 +17,33 @@ LOG = logging.getLogger(__name__)
 # Demp støy fra websocket-biblioteket
 logging.getLogger("websocket").setLevel(logging.CRITICAL)
 
-# Engine.IO heartbeat.
+# Engine.IO heartbeat – to serverdialekter med motsatt forventning.
 #
-# Serveren venter at KLIENTEN sender PING ("2"); den svarer med PONG ("3").
-# Dette er EIO v3-semantikk selv om URL-en sier EIO=4 – verifisert mot
-# smartalarm.alarm24.no: uten heartbeat lukker serveren forbindelsen etter
-# nøyaktig pingInterval + pingTimeout (25s + 5s = 30s), hver gang.
+# portal.vestasecurity.eu (Vesta, tenant-en den nye appen bruker) er en streng
+# Engine.IO v4-server: SERVEREN sender PING ("2") hvert pingInterval, og
+# klienten må svare PONG ("3"). Målt med tools/ws_probe: server-PING på
+# 25.0/50.1/75.1s, linja lever i det uendelige, klienten sender ingenting. En
+# klient-PING her er et protokollbrudd og serveren dropper socketen ~40ms etter
+# (dette var 20s-reconnect-loopen etter 0.1.6).
 #
-# Fallback hvis handshake ikke oppgir pingInterval.
+# smartalarm.alarm24.no (gammel tenant) er motsatt: den sender aldri "2" og
+# venter at KLIENTEN pinger – v3-stil – og lukker etter pingInterval+pingTimeout
+# (25s+5s) hvis klienten er stille.
+#
+# Strategi (host-uavhengig): ved handshake pinger vi IKKE. Vi venter på å se om
+# serveren pinger oss først. Gjør den det (v4/Vesta) svarer vi bare PONG. Gjør
+# den det ikke innen en v3-server ville droppet oss, faller vi tilbake til
+# klient-drevet PING (v3/alarm24). _on_message svarer PONG på server-PING uansett.
+#
+# Fallback hvis handshake ikke oppgir tidene.
 DEFAULT_PING_INTERVAL = 25.0
-# Send i god tid før serverens frist – 80 % av intervallet.
+DEFAULT_PING_TIMEOUT = 5.0
+# Klient-PING sendes på 80 % av intervallet (kun i v3-fallbacken).
 PING_MARGIN = 0.8
+# Hvor lenge etter forventet server-PING vi venter før vi konkluderer med at det
+# er en v3-server og pinger selv – må ligge mellom server-PING (pingInterval) og
+# en v3-servers lukking (pingInterval + pingTimeout).
+SERVER_PING_GRACE = 2.0
 
 
 class WSClient(threading.Thread):
@@ -54,6 +70,9 @@ class WSClient(threading.Thread):
 
         # Heartbeat – settes opp på nytt for hver tilkobling.
         self._hb_stop: threading.Event | None = None
+        # Fallback-timer + flagg for v3/v4-avgjørelsen (se toppen av fila).
+        self._hb_fallback: threading.Timer | None = None
+        self._server_drives_hb = False
 
         super().__init__(daemon=True)
 
@@ -81,23 +100,68 @@ class WSClient(threading.Thread):
         threading.Thread(target=_beat, daemon=True, name="shs-ws-heartbeat").start()
 
     def _stop_heartbeat(self) -> None:
+        if self._hb_fallback is not None:
+            self._hb_fallback.cancel()
+            self._hb_fallback = None
         if self._hb_stop is not None:
             self._hb_stop.set()
             self._hb_stop = None
 
     def _handle_handshake(self, ws, content: str) -> None:
-        """Les pingInterval fra Engine.IO-handshake og start heartbeat."""
-        interval = DEFAULT_PING_INTERVAL
-        try:
-            ping_ms = json.loads(content).get("pingInterval")
-            if ping_ms:
-                interval = ping_ms / 1000.0
-        except Exception as ex:
-            LOG.debug("Could not parse handshake (%s) – using default", ex)
+        """Avgjør heartbeat-stil ut fra Engine.IO-handshaken.
 
-        interval *= PING_MARGIN
-        LOG.debug("Engine.IO handshake – sending PING every %.1fs", interval)
-        self._start_heartbeat(ws, interval)
+        Vi pinger ikke ennå. Pinger serveren oss først (v4) er vi stille og
+        svarer bare PONG; ellers faller vi litt senere tilbake til klient-PING
+        (v3). Se dialekt-forklaringen øverst i fila.
+        """
+        interval = DEFAULT_PING_INTERVAL
+        ping_timeout = DEFAULT_PING_TIMEOUT
+        try:
+            hs = json.loads(content)
+            if hs.get("pingInterval"):
+                interval = hs["pingInterval"] / 1000.0
+            if hs.get("pingTimeout"):
+                ping_timeout = hs["pingTimeout"] / 1000.0
+        except Exception as ex:
+            LOG.debug("Could not parse handshake (%s) – using defaults", ex)
+
+        self._stop_heartbeat()
+        self._server_drives_hb = False
+        beat = interval * PING_MARGIN
+
+        # Fyr etter at serverens egen PING ville kommet (pingInterval), men før
+        # en v3-server ville lukket oss (pingInterval + pingTimeout).
+        grace = min(SERVER_PING_GRACE, max(ping_timeout - 1.0, 0.5))
+        fallback_delay = interval + grace
+
+        LOG.debug(
+            "Handshake pingInterval=%.1fs pingTimeout=%.1fs – waiting %.1fs for a "
+            "server PING before falling back to client PING",
+            interval,
+            ping_timeout,
+            fallback_delay,
+        )
+        timer = threading.Timer(fallback_delay, self._maybe_start_client_ping, args=(ws, beat))
+        timer.daemon = True
+        self._hb_fallback = timer
+        timer.start()
+
+    def _maybe_start_client_ping(self, ws, beat: float) -> None:
+        """Fallback: ingen server-PING kom, så vi driver heartbeaten selv (v3)."""
+        if self.stop or self._server_drives_hb:
+            if self._server_drives_hb:
+                LOG.debug("Server drives the heartbeat (Engine.IO v4) – no client PING")
+            return
+        LOG.debug("No server PING seen – falling back to client-driven PING (v3)")
+        try:
+            # Første PING nå – den periodiske beateren sender først etter `beat`,
+            # som ellers ville vært for sent mot v3-serverens frist.
+            ws.send("2")
+            LOG.debug("Sent Engine.IO PING (2)")
+        except Exception as ex:
+            LOG.debug("Fallback first PING failed: %s", ex)
+            return
+        self._start_heartbeat(ws, beat)
 
     # ----------------------------------------------------------------------
     # PUBLIC API
@@ -279,8 +343,10 @@ class WSClient(threading.Thread):
             self._handle_handshake(ws, content)
 
         elif code == "2":
-            # Serveren pinger oss (ikke observert mot alarm24, men billig å
-            # støtte): PING skal alltid besvares med PONG.
+            # Server-PING (Engine.IO v4, f.eks. Vesta): merk at serveren driver
+            # heartbeaten – da skal vi aldri klient-pinge denne forbindelsen –
+            # og svar PONG.
+            self._server_drives_hb = True
             try:
                 ws.send("3")
                 LOG.debug("Answered server PING with PONG (3)")
