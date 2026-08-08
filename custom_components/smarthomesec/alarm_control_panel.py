@@ -24,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.core import callback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from . import SmarthomesecCoordinator
@@ -78,9 +79,35 @@ class SmarthomesecAlarm(CoordinatorEntity, AlarmControlPanelEntity):
         self._alarm = self.coordinator.data["alarms"][self.area]
         self.async_write_ha_state()
 
+    def _event_triggered(self) -> bool:
+        """True if the coordinator latched a WS alarm event for this area.
+
+        REST is not confirmed to report mode="triggered" on this tenant, so an
+        active alarm may only ever be visible as a WebSocket event.
+        """
+        coord = getattr(self, "coord", None)
+        if coord is None:
+            return False
+        return bool(coord.is_area_triggered(self.area))
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Expose what triggered the alarm, for automations and diagnosis."""
+        coord = getattr(self, "coord", None)
+        last = getattr(coord, "_last_trigger", None) if coord else None
+        if not last:
+            return None
+        return {
+            "last_trigger_event": last.get("event_type"),
+            "last_trigger_data": last.get("data"),
+            "last_trigger_time": dt_util.utc_from_timestamp(last["at"]).isoformat(),
+        }
+
     @property
     def alarm_state(self) -> AlarmControlPanelState | None:
         """Return the state of the device."""
+        if self._event_triggered():
+            return AlarmControlPanelState.TRIGGERED
         if self._alarm["mode"] == "disarm":
             return AlarmControlPanelState.DISARMED
         elif self._alarm["mode"] == "arm":

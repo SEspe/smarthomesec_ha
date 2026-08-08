@@ -44,6 +44,12 @@ from .const import (
     STARTUP_MESSAGE,
     TYPE_CLASS_BINARY_SENSOR,
     ALARM_AREAS,
+    ALARM_MODE_TRIGGERED,
+    ALARM_STATE_FIELDS,
+    ALARM_TRIGGER_TOKENS,
+    ALARM_CLEAR_TOKENS,
+    ALARM_TRIGGER_TTL,
+    KNOWN_EVENT_TYPES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -259,6 +265,12 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         self.status: dict | None = None
         self.wsc: WSClient | None = None
         self._shutdown: bool = False
+        # Utløst alarm: område -> monotont tidspunkt for siste trigger-event.
+        # WS-drevet, fordi REST ikke er bekreftet å rapportere "triggered".
+        self._triggered_areas: dict[str, float] = {}
+        self._last_trigger: dict | None = None
+        # Event-typer vi allerede har logget som ukjente (én INFO-linje hver).
+        self._logged_event_types: set[str] = set()
 
     async def _async_update_data(self):
         """Fetch data from API endpoint and normalize it."""
@@ -273,8 +285,18 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     ret["devices"][device_id] = device
 
                 for alarm in status["model"]:
-                    area_id = alarm["area"]
-                    ret["alarms"][str(area_id)] = alarm
+                    area_id = str(alarm["area"])
+                    ret["alarms"][area_id] = alarm
+
+                    mode = alarm.get("mode")
+                    # REST er fasit når den melder disarm: alarmen er kvittert,
+                    # så en WS-latch skal ikke holde panelet i TRIGGERED.
+                    if mode == "disarm":
+                        self.clear_areas_triggered([area_id])
+                    # ...og hvis REST selv melder utløst alarm, latch den, slik
+                    # at tilstanden overlever et refresh der modus går tilbake.
+                    elif mode == ALARM_MODE_TRIGGERED:
+                        self.mark_areas_triggered([area_id])
 
                 return ret
 
@@ -488,6 +510,105 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             if alarm["area"] in areas:
                 alarms.append(alarm)
         return alarms
+
+    # ------------------------------------------------------------------
+    # Utløst alarm (TRIGGERED)
+    #
+    # Panelet sender WS-eventer når en alarm er aktiv, men formatet er ikke
+    # målt (se CLAUDE.md). Selve tilstandsmaskineriet – latch, TTL, kvittering
+    # – er derfor formatuavhengig, mens gjenkjenningen er en bevisst
+    # konservativ token-match som er lett å utvide når formatet er kjent.
+    # ------------------------------------------------------------------
+
+    def _trigger_state(self) -> dict:
+        """Latch: område -> monotont tidspunkt for siste trigger-event."""
+        if not hasattr(self, "_triggered_areas"):
+            self._triggered_areas = {}
+        return self._triggered_areas
+
+    def _iter_alarm_fields(self, data, depth: int = 0):
+        """Yield lowercase values of the fields that may carry an alarm state."""
+        if depth > 3 or not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            if isinstance(value, dict):
+                yield from self._iter_alarm_fields(value, depth + 1)
+            elif key in ALARM_STATE_FIELDS and isinstance(value, str):
+                yield value.lower()
+
+    def classify_alarm_event(self, event_type, event_data) -> str | None:
+        """Return "trigger", "clear" or None for a parsed WS event.
+
+        Trigger vinner over clear: et event som melder både utløst og
+        gjenopprettet skal ikke kunne avstille alarmen.
+        """
+        values = list(self._iter_alarm_fields(event_data))
+        if isinstance(event_type, str):
+            values.append(event_type.lower())
+
+        if any(token in value for value in values for token in ALARM_TRIGGER_TOKENS):
+            return "trigger"
+        if any(token in value for value in values for token in ALARM_CLEAR_TOKENS):
+            return "clear"
+        return None
+
+    def _areas_for_event(self, event_data) -> list[str]:
+        """Which areas an event applies to – all of them if it doesn't say."""
+        area = event_data.get("area") if isinstance(event_data, dict) else None
+        if area not in (None, ""):
+            return [str(area)]
+        known = list((getattr(self, "data", None) or {}).get("alarms", {}))
+        return known or list(ALARM_AREAS)
+
+    def mark_areas_triggered(self, areas) -> None:
+        now = time.monotonic()
+        state = self._trigger_state()
+        for area in areas:
+            state[str(area)] = now
+
+    def clear_areas_triggered(self, areas) -> None:
+        state = self._trigger_state()
+        for area in areas:
+            state.pop(str(area), None)
+
+    def is_area_triggered(self, area) -> bool:
+        """True if a WS alarm event latched this area and it has not expired."""
+        state = self._trigger_state()
+        started = state.get(str(area))
+        if started is None:
+            return False
+        if time.monotonic() - started > ALARM_TRIGGER_TTL:
+            state.pop(str(area), None)
+            return False
+        return True
+
+    def handle_alarm_event(self, event_type, event_data) -> str | None:
+        """Latch or release TRIGGERED from a WS event. Returns the verdict."""
+        verdict = self.classify_alarm_event(event_type, event_data)
+        if verdict is None:
+            return None
+
+        areas = self._areas_for_event(event_data)
+
+        if verdict == "trigger":
+            self.mark_areas_triggered(areas)
+            self._last_trigger = {
+                "areas": areas,
+                "event_type": event_type,
+                "data": event_data,
+                "at": time.time(),
+            }
+            _LOGGER.warning(
+                "ALARM TRIGGERED – areas %s, event %s: %s", areas, event_type, event_data
+            )
+        else:
+            if any(self.is_area_triggered(area) for area in areas):
+                _LOGGER.info(
+                    "Alarm cleared – areas %s, event %s", areas, event_type
+                )
+            self.clear_areas_triggered(areas)
+
+        return verdict
 
     def set_alarm_mode(self, area, mode, pin):
         payload = {
@@ -715,6 +836,26 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             event_data = inner.get("data", {})
 
             _LOGGER.debug("WS EVENT: %s | %s", event_type, event_data)
+
+            # 🚨 Utløst alarm – sjekkes for ALLE event-typer, også ukjente,
+            # siden vi ikke vet hvilken type panelet bruker for alarm.
+            self.handle_alarm_event(event_type, event_data)
+
+            # Ukjent event-type: logg én gang med rå payload, slik at den
+            # virkelige alarmmeldingen kan leses ut av loggen og legges inn i
+            # const.py. Én linje per type – ikke per event.
+            if event_type not in KNOWN_EVENT_TYPES:
+                seen = getattr(self, "_logged_event_types", None)
+                if seen is None:
+                    seen = self._logged_event_types = set()
+                if event_type not in seen:
+                    seen.add(event_type)
+                    _LOGGER.info(
+                        "Unhandled WS event type %r – raw payload: %s "
+                        "(please report if this is an alarm event)",
+                        event_type,
+                        inner,
+                    )
 
             #
             # 🔥 DEVICE_STATUS → dør åpen/lukket

@@ -45,3 +45,59 @@ TYPE_CLASS_BINARY_SENSOR = {
 }
 
 ALARM_AREAS = ["1"]
+
+# --- Utløst alarm (TRIGGERED) ------------------------------------------------
+#
+# REST (panel/cycle) rapporterer modus i model[].mode, og "triggered" er den
+# kjente verdien for utløst alarm – den mappes direkte i alarm_control_panel.
+# Panelet sender i tillegg WS-eventer når en alarm er aktiv, men det EKSAKTE
+# formatet er IKKE målt ennå (se CLAUDE.md, "Alarm-trigger"). Derfor:
+#
+#   * maskineriet under er formatuavhengig (latch + TTL + kvittering),
+#   * gjenkjenningen er bevisst konservativ – heller en manglende TRIGGERED enn
+#     en falsk (dette er et alarmsystem; falsk utløst-status er verre enn treg),
+#   * ukjente event-typer logges én gang på INFO med rå payload, slik at den
+#     virkelige alarmmeldingen kan leses rett ut av loggen og legges inn her.
+#
+# Utvid ALARM_TRIGGER_TOKENS når det faktiske formatet er målt.
+
+ALARM_MODE_TRIGGERED = "triggered"
+
+# Event-typer vi allerede håndterer eksplisitt. Alt annet logges én gang.
+KNOWN_EVENT_TYPES = ("DEVICE_STATUS", "MODE_CHANGE", "REPORT")
+
+# Felt i WS-eventdata som kan bære en alarmtilstand.
+ALARM_STATE_FIELDS = (
+    "mode",
+    "status",
+    "event",
+    "event_type",
+    "report_type",
+    "alarm_type",
+    "type",
+)
+
+# Verdier som betyr "alarmen er utløst". Substring-match, case-insensitivt.
+# Merk: "alarm" er bevisst IKKE med – ordet finnes i for mange nøytrale felt
+# (områdenavn, "alarm_status": "normal") og ville gitt falske utløsninger.
+ALARM_TRIGGER_TOKENS = (
+    "triggered",
+    "burglar",
+    "panic",
+    "duress",
+    "hold_up",
+    "holdup",
+)
+
+# Verdier som betyr "ikke lenger utløst" (avstilt/kvittert/gjenopprettet).
+ALARM_CLEAR_TOKENS = (
+    "disarm",
+    "restore",
+    "cancel",
+    "abort",
+    "clear",
+)
+
+# Hvor lenge en WS-utløst alarm holdes i TRIGGERED uten at REST bekrefter den.
+# Latchen fjernes uansett når REST melder disarm, eller når et clear-event kommer.
+ALARM_TRIGGER_TTL = 300.0
