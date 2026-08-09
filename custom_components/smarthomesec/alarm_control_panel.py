@@ -80,10 +80,10 @@ class SmarthomesecAlarm(CoordinatorEntity, AlarmControlPanelEntity):
         self.async_write_ha_state()
 
     def _event_triggered(self) -> bool:
-        """True if the coordinator latched a WS alarm event for this area.
+        """True if the coordinator latched an alarm for this area.
 
-        REST is not confirmed to report mode="triggered" on this tenant, so an
-        active alarm may only ever be visible as a WebSocket event.
+        The panel reports an active alarm only as a new record in
+        alarm_event_latest; mode stays "arm" while the siren runs.
         """
         coord = getattr(self, "coord", None)
         if coord is None:
@@ -98,8 +98,11 @@ class SmarthomesecAlarm(CoordinatorEntity, AlarmControlPanelEntity):
         if not last:
             return None
         return {
-            "last_trigger_event": last.get("event_type"),
-            "last_trigger_data": last.get("data"),
+            "last_trigger_reason": last.get("reason"),
+            "last_trigger_cid_code": last.get("cid_code"),
+            "last_trigger_zone": last.get("zone"),
+            "last_trigger_device": last.get("device"),
+            "last_trigger_report_id": last.get("report_id"),
             "last_trigger_time": dt_util.utc_from_timestamp(last["at"]).isoformat(),
         }
 
