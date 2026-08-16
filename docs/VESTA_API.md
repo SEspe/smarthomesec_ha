@@ -153,7 +153,7 @@ same panel, all reproducible from logs:
 |---|---|---|---|
 | 2026-08-09 | armed overnight, no alarm | **`true`** | 42 |
 | 2026-08-09 | disarmed | `false` | 33 |
-| 2026-08-16 | **armed 17 min, quiet, no alarm** | **`false`** | **8** |
+| 2026-08-16 | **armed 17 min, quiet, all zones sealed** | **`false`** | **8** |
 | 2026-08-16 | armed, alarm sounding | **`true`** | 1 |
 
 The 17-minute test was deliberate and is not vacuous — eight refreshes landed inside the armed
@@ -161,17 +161,20 @@ window, including polls five and ten minutes in, and every one read `false`. So 
 is refuted as a general rule, while the 42 armed `true` samples on 2026-08-09 are equally real.
 Something other than arm state drives it, and a short quiet arming is not enough to raise it.
 
-Two candidate readings survive, and the data contradicts each of them somewhere:
+**The obvious explanation is ruled out.** "Armed with every zone sealed" does not account for it:
+the owner confirms all door contacts were **closed** throughout the 17-minute test, and `burglar`
+stayed `false` anyway. Nor does "alarm active", which fits 2026-08-16 exactly and fails against 42
+consecutive armed `true` samples on 2026-08-09 with no alarm anywhere in that log.
 
-- **"burglary protection fully engaged"** — i.e. armed *and* every burglary zone sealed. The
-  2026-08-09 arming was overnight with the house shut; the 2026-08-16 test ran while a door
-  contact appears to have been open much of the day. But `burglar` was `true` during the alarm at
-  a moment when a door had just opened, which this does not explain.
-- **"alarm active"** — fits 2026-08-16 exactly, and fails on 2026-08-09, where 42 consecutive
-  armed samples read `true` with no alarm anywhere in the log.
+What separates the two armed-and-sealed cases is **duration**: 2026-08-09 was an overnight arming
+already in progress when the log began, 2026-08-16 was 17 minutes. So the leading remaining
+candidate is that `burglar` is raised some considerable time after arming — an "away/fully armed"
+state the panel settles into — rather than at the moment of arming. Unverified, and it does not
+explain the alarm-instant `true` either.
 
-The distinguishing experiment is a **long, quiet, fully-sealed arming** (e.g. overnight): if
-`burglar` goes `true` with no alarm, it is a state of the arming, not of an alarm.
+The distinguishing experiment is an **ordinary overnight arming**: if `burglar` goes `true` with
+no alarm and every zone shut, it is a property of the arming and the alarm correlation was
+coincidence. Until then, treat the field as unexplained.
 
 **Do not build on this field.** The one thing all four rows agree on is that it is `false` while
 disarmed, which is useless. Treating it as "alarm" would have been wrong on 2026-08-09; treating
