@@ -260,19 +260,35 @@ When an alarm fires, the panel sends `REPORT {"type": "ALARM"}` **and** a bare
 A door contact's `DEVICE_STATUS` arrives when the door **opens** — 27 seconds before the alarm
 record existed, in the measured case — so it is far too early to be used as an alarm signal.
 
+**Detectors report while the system is disarmed, too.** Motion sensors fire `DEVICE_STATUS`
+regardless of arm state (measured: all three PIRs on the test system produced events across an
+8.5-hour mostly-disarmed log, and one fired while disarmed minutes before the test alarm). What
+arming changes is the panel's *response*, configured per device and per mode in
+`sresp_mode_<n>` / `sresp_entry_<n>` on the `device_status[]` entry — the test system's living-room
+PIR carries `sresp_mode_0: "0"` (disarmed: do nothing) and `sresp_mode_1: "5"` (armed away:
+respond). So the cloud sees the motion either way; only the alarm decision is gated.
+
+**But `status_motion` is useless.** It was the empty string in **every** sample across both logs
+(1261/1261 and 142/142) — including refreshes taken immediately after a PIR event. The field
+exists and is never populated, so a motion detector's state cannot be read from `panel/cycle`. The
+`DEVICE_STATUS` event is the only motion signal available, and it carries no state, so a client
+that wants a motion entity has to synthesise one: pulse it on the event and reset it after a few
+seconds.
+
 ## 6. A measured alarm, end to end
 
 2026-08-16, deliberate test alarm on a live panel:
 
 ```
 11:10:09.641  report_event_latest -> CID 3401                    armed
-11:11:10.167  WS DEVICE_STATUS RF:09cdcc30                       PIR trips
+11:11:10.167  WS DEVICE_STATUS RF:0e253110                       door contact opens
               panel/cycle: mode=arm, burglar=false
 11:11:37.100  WS REPORT {'type': 'ALARM', 'area': '1'}
 11:11:37.107  WS {'refreshed_type': 'ALARM'}
 11:11:37.346  alarm_event_latest -> report_id 388956623,
-              cid 18113001005, cid_code 1130  (Burglary, area 1, zone 5)
+              cid 18113001005, cid_code 1130  (Burglary, area 1, zone 5 = a PIR)
               panel/cycle: mode=arm, burglar=true
+11:11:37.351  WS DEVICE_STATUS RF:09cdcc30                       the PIR that caused it
 11:11:40.605  WS MODE_CHANGE                                     user disarms
 11:11:47.545  report_event_latest -> CID 1406                    cancel
 ```
