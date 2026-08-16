@@ -72,7 +72,13 @@ ALARM_AREAS = ["1"]
 ALARM_MODE_TRIGGERED = "triggered"
 
 # Event-typer vi allerede håndterer eksplisitt. Alt annet logges én gang.
-KNOWN_EVENT_TYPES = ("DEVICE_STATUS", "MODE_CHANGE", "REPORT")
+#
+# "ALARM" kom inn 2026-08-16, målt under en ekte testalarm: panelet sender BÅDE
+# REPORT {'type': 'ALARM'} og en frittstående {'refreshed_type': 'ALARM'} i
+# samme øyeblikk som alarmen går. Begge er tomme – WS bærer fortsatt ingen
+# tilstand – men selve typen er signalet. Fram til 0.1.12 falt den i
+# ukjent-grenen og ba brukeren rapportere "hvis dette er en alarmhendelse".
+KNOWN_EVENT_TYPES = ("DEVICE_STATUS", "MODE_CHANGE", "REPORT", "ALARM")
 
 # Nøkkelen i panel/cycle-data som bærer siste alarmhendelse.
 ALARM_EVENT_KEY = "alarm_event_latest"
@@ -85,14 +91,19 @@ REPORT_EVENT_KEY = "report_event_latest"
 
 # Hvor ofte panel/cycle pollast.
 #
-# WS er bare en dørklokke, så REST-pollen er eneste sikkerhetsnett når en
-# hendelse ikke gir noe WS-event. Til og med 0.1.11 var intervallet 3600 s –
-# seks ganger større enn ALARM_EVENT_MAX_AGE (600 s). En alarm som ikke ga et
-# WS-event i alarmøyeblikket ville derfor rukket å bli "historikk" før den ble
-# lest, og blitt forkastet i stillhet. Verre: en dørkontakt gir DEVICE_STATUS
-# når døren åpnes, altså FØR inngangsforsinkelsen – den refreshen kommer for
-# tidlig til å se alarmposten. 60 s gir ti pollrunder innenfor ferskhetsvinduet.
-REST_POLL_INTERVAL = 60
+# Pollen er SIKKERHETSNETTET, ikke hovedveien: panelet sender et ALARM-event på
+# WS i alarmøyeblikket (målt 2026-08-16), og det gir refresh på ~0,2 s. Men
+# nettopp derfor må intervallet være mindre enn ALARM_EVENT_MAX_AGE (600 s) –
+# hvis WS er nede når alarmen går, er pollen det eneste som leser alarmposten,
+# og kommer den for sent er posten allerede "historikk" og forkastes i stillhet.
+# Til og med 0.1.11 var intervallet 3600 s, altså seks ganger vinduet: nettet
+# hadde ingen bunn. 0.1.12 satte 60 s; 0.1.13 slakker til 300 s nå som WS-veien
+# er målt – fortsatt to pollrunder innenfor vinduet.
+#
+# Merk også at en dørkontakt gir DEVICE_STATUS når døren åpnes, altså FØR
+# inngangsforsinkelsen: den refreshen kom 27 s for tidlig til å se alarmposten
+# under testalarmen. Det er ALARM-eventet som redder den, ikke dørklokka.
+REST_POLL_INTERVAL = 300
 
 # Hvor ferskt utc_event_time må være for at hendelsen skal regnes som live.
 # Beskytter mot å utløse alarm på historikk – f.eks. ved oppstart mot en
@@ -124,6 +135,14 @@ CID_REASONS = {
     134: "Entry/exit",
     137: "Tamper",
     139: "Burglary verified",
+    # Ikke-alarmklasse (utenfor 100–199) – kun for lesbare logger. Disse skal
+    # ALDRI utløse noe; classify_cid avviser dem på kodeområdet. Observert på
+    # dette panelet 2026-08-16.
+    301: "AC loss",
+    374: "Trouble closing",
+    401: "Open/close",
+    406: "Cancel",
+    602: "Periodic test",
 }
 
 # Hvor lenge en alarm holdes i TRIGGERED uten ny bekreftelse. Latchen fjernes

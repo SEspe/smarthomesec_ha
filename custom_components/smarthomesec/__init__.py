@@ -305,6 +305,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     ret["alarms"][area_id] = alarm
 
                     mode = alarm.get("mode")
+                    self.observe_burglar_field(area_id, mode, alarm.get("burglar"))
                     # REST er fasit når den melder disarm: alarmen er kvittert,
                     # så en WS-latch skal ikke holde panelet i TRIGGERED.
                     if mode == "disarm":
@@ -657,6 +658,38 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             report_id,
         )
         return "alarm"
+
+    def observe_burglar_field(self, area, mode, burglar) -> bool:
+        """Log every (mode, burglar) transition. Observation only.
+
+        model[].burglar er det ene feltet vi fortsatt ikke forstår. Session 5
+        målte arm ⇒ True 42/42 og disarm ⇒ False 108/108 over 8,5 timer, altså
+        "armert". Testalarmen 2026-08-16 viste armert med burglar=False kl.
+        11:11:10 og armert med burglar=True kl. 11:11:37 mens alarmen gikk.
+        Begge kan ikke være riktige om samme felt.
+
+        Dette logger hver overgang én gang, slik at en vanlig armert periode
+        uten alarm avgjør saken. INGENTING leser returverdien eller feltet –
+        og det skal fortsatt ikke gjøre det før spørsmålet er avklart: tar
+        session 5 rett, gir burglar⇒TRIGGERED et panel i evig alarm.
+        """
+        state = (str(mode or ""), bool(burglar) if burglar != "" else None)
+        seen = getattr(self, "_burglar_state", None)
+        if seen is None:
+            seen = self._burglar_state = {}
+
+        if seen.get(area) == state:
+            return False
+
+        seen[area] = state
+        _LOGGER.info(
+            "Area %s: mode=%s burglar=%r%s",
+            area,
+            state[0],
+            burglar,
+            " [TRIGGERED latched]" if self.is_area_triggered(area) else "",
+        )
+        return True
 
     def observe_report_record(self, status: dict) -> str | None:
         """Log every change in report_event_latest. Observation only.
@@ -1022,6 +1055,22 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     )
 
                 threading.Thread(target=delayed_refresh, daemon=True).start()
+                return
+
+            #
+            # 🚨 ALARM → panelet melder utløst alarm. Målt 2026-08-16: kommer
+            # som både REPORT {'type': 'ALARM'} og en frittstående
+            # {'refreshed_type': 'ALARM'} i samme millisekund. Payloaden er tom
+            # – selve typen er signalet – så vi gjør det eneste som gir mening:
+            # hent REST med én gang. Alarmposten ligger der allerede (245 ms fra
+            # event til ALARM TRIGGERED i målingen).
+            #
+            if event_type == "ALARM":
+                _LOGGER.info("WS ALARM event – fetching panel state now")
+                asyncio.run_coroutine_threadsafe(
+                    self.async_request_refresh(),
+                    self.hass.loop
+                )
                 return
 
             #
