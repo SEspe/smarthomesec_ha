@@ -48,6 +48,8 @@ from .const import (
     ALARM_TRIGGER_TTL,
     ALARM_EVENT_KEY,
     ALARM_EVENT_MAX_AGE,
+    REPORT_EVENT_KEY,
+    REST_POLL_INTERVAL,
     CID_LENGTH,
     CID_ALARM_QUALIFIER,
     CID_RESTORE_QUALIFIER,
@@ -259,7 +261,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="Smarthomesec",
-            update_interval=timedelta(seconds=3600),
+            update_interval=timedelta(seconds=REST_POLL_INTERVAL),
         )
 
         self.hass = hass
@@ -275,6 +277,9 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         self._triggered_areas: dict[str, float] = {}
         self._last_trigger: dict | None = None
         self._last_alarm_report_id: str | None = None
+        # Kun observasjon (se observe_report_record): siste report_id vi har
+        # sett i report_event_latest, slik at vi logger hver endring én gang.
+        self._last_report_event_id: str | None = None
         # Event-typer vi allerede har logget som ukjente (én INFO-linje hver).
         self._logged_event_types: set[str] = set()
 
@@ -289,6 +294,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 # Alarmhendelsen leses FØR modus-loopen, slik at en disarm i
                 # samme refresh alltid vinner over en fersk alarm-latch.
                 self.handle_alarm_record(status)
+                self.observe_report_record(status)
 
                 for device in status["device_status"]:
                     device_id = device["device_id"]
@@ -602,10 +608,13 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
         kind = self.classify_cid(event.get("cid_code"))
         if kind is None:
-            _LOGGER.debug(
-                "New panel report %s is not alarm class (cid_code=%s) – ignored",
+            # alarm_event_latest endrer seg sjelden, så en endring vi IKKE
+            # latcher på er verdt å se i en vanlig logg – ikke bare i debug.
+            _LOGGER.info(
+                "New panel report %s is not alarm class (cid_code=%s, cid=%s) – ignored",
                 report_id,
                 event.get("cid_code"),
+                event.get("cid"),
             )
             return None
 
@@ -648,6 +657,43 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             report_id,
         )
         return "alarm"
+
+    def observe_report_record(self, status: dict) -> str | None:
+        """Log every change in report_event_latest. Observation only.
+
+        report_event_latest er søsteren til alarm_event_latest og bærer siste
+        hendelse uansett klasse. Vi utleder ingen tilstand av den – den finnes
+        her fordi ingen ennå har sett en alarm skje live: under en ekte alarm
+        legger dette igjen hele CID-rekkefølgen (utløsning, eventuell restore,
+        av-/påslag etterpå) i loggen, som er nettopp det som mangler for å
+        avgjøre om alarm_event_latest oppdateres umiddelbart.
+        """
+        event = status.get(REPORT_EVENT_KEY) or {}
+        report_id = str(event.get("report_id") or "")
+        if not report_id:
+            return None
+
+        previous = self._last_report_event_id
+        self._last_report_event_id = report_id
+        if report_id == previous:
+            return None
+
+        # NB: siste CCC-felt er sone ELLER brukernummer, avhengig av hendelses-
+        # klasse (14xx av-/påslag bærer bruker). Derfor "zone/user" i loggen –
+        # bare for alarmklassen er det garantert en sone.
+        area, zone = self.parse_cid(event.get("cid"))
+        device = self._zone_device_name(area, zone) if zone else None
+        _LOGGER.info(
+            "Panel event %s: %s (cid_code=%s, cid=%s, area %s, zone/user %s%s)",
+            report_id,
+            self.cid_reason(event.get("cid_code")),
+            event.get("cid_code"),
+            event.get("cid"),
+            area,
+            zone,
+            f" [{device}]" if device else "",
+        )
+        return report_id
 
     @staticmethod
     def _alarm_event_time(event) -> float | None:
