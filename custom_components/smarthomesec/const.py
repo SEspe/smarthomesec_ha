@@ -77,6 +77,23 @@ KNOWN_EVENT_TYPES = ("DEVICE_STATUS", "MODE_CHANGE", "REPORT")
 # Nøkkelen i panel/cycle-data som bærer siste alarmhendelse.
 ALARM_EVENT_KEY = "alarm_event_latest"
 
+# Søsterfeltet: siste hendelse uansett klasse (samme form, men også 14xx/16xx/
+# 3xx). Bekreftet i Yale-OEM-en, som kjører samme Climax-backend (se CLAUDE.md).
+# Vi utleder ingen tilstand av det – kun observasjon, slik at en ekte alarm
+# etterlater hele rekkefølgen av CID-koder i loggen.
+REPORT_EVENT_KEY = "report_event_latest"
+
+# Hvor ofte panel/cycle pollast.
+#
+# WS er bare en dørklokke, så REST-pollen er eneste sikkerhetsnett når en
+# hendelse ikke gir noe WS-event. Til og med 0.1.11 var intervallet 3600 s –
+# seks ganger større enn ALARM_EVENT_MAX_AGE (600 s). En alarm som ikke ga et
+# WS-event i alarmøyeblikket ville derfor rukket å bli "historikk" før den ble
+# lest, og blitt forkastet i stillhet. Verre: en dørkontakt gir DEVICE_STATUS
+# når døren åpnes, altså FØR inngangsforsinkelsen – den refreshen kommer for
+# tidlig til å se alarmposten. 60 s gir ti pollrunder innenfor ferskhetsvinduet.
+REST_POLL_INTERVAL = 60
+
 # Hvor ferskt utc_event_time må være for at hendelsen skal regnes som live.
 # Beskytter mot å utløse alarm på historikk – f.eks. ved oppstart mot en
 # gammel hendelse, eller hvis panelet spiller av en eldre rapport på nytt.

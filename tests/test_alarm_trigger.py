@@ -14,7 +14,11 @@ from homeassistant.components.alarm_control_panel import AlarmControlPanelState
 
 from custom_components.smarthomesec import SmarthomesecCoordinator
 from custom_components.smarthomesec.alarm_control_panel import SmarthomesecAlarm
-from custom_components.smarthomesec.const import ALARM_TRIGGER_TTL
+from custom_components.smarthomesec.const import (
+    ALARM_EVENT_MAX_AGE,
+    ALARM_TRIGGER_TTL,
+    REST_POLL_INTERVAL,
+)
 
 # The real record from the 2026-08-04 burglary alarm, as the panel reported it.
 BURGLARY = {
@@ -309,3 +313,65 @@ def test_trigger_attributes_expose_the_cause():
 
 def test_no_attributes_before_any_alarm():
     assert _panel(_primed(), "arm").extra_state_attributes is None
+
+
+# ----------------------------------------------------------------------
+# Detection window: the REST poll is the only safety net when no WS event
+# fires at alarm time, so it must stay well inside the freshness window.
+# Until 0.1.11 it was 3600s against a 600s window — a real alarm without a
+# WS event aged into "history" before it was ever read.
+# ----------------------------------------------------------------------
+
+
+def test_poll_interval_fits_several_times_into_the_freshness_window():
+    assert REST_POLL_INTERVAL * 2 <= ALARM_EVENT_MAX_AGE
+
+
+def test_an_alarm_seen_one_poll_late_still_latches():
+    coord = _primed()
+    coord.handle_alarm_record({"alarm_event_latest": _record(age=REST_POLL_INTERVAL)})
+
+    assert coord.is_area_triggered("1") is True
+
+
+# ----------------------------------------------------------------------
+# report_event_latest: observation only, never state
+# ----------------------------------------------------------------------
+
+
+def _report(report_id="500", cid="18140101101", cid_code="1401"):
+    return {
+        "report_id": report_id,
+        "cid": cid,
+        "cid_code": cid_code,
+        "event_time": "",
+        "time": str(int(time.time())),
+        "utc_event_time": str(int(time.time())),
+    }
+
+
+def test_report_record_is_logged_once_per_change():
+    coord = _primed()
+    coord._last_report_event_id = None
+
+    assert coord.observe_report_record({"report_event_latest": _report()}) == "500"
+    assert coord.observe_report_record({"report_event_latest": _report()}) is None
+    assert coord.observe_report_record({"report_event_latest": _report("501")}) == "501"
+
+
+def test_report_record_never_triggers_the_alarm():
+    coord = _primed()
+    coord._last_report_event_id = None
+    # Even an alarm-class code here must not latch: alarm_event_latest is the
+    # only field detection is allowed to read.
+    coord.observe_report_record({"report_event_latest": _report(cid_code="1130")})
+
+    assert coord.is_area_triggered("1") is False
+
+
+def test_missing_report_record_is_harmless():
+    coord = _primed()
+    coord._last_report_event_id = None
+
+    assert coord.observe_report_record({}) is None
+    assert coord.observe_report_record({"report_event_latest": None}) is None
