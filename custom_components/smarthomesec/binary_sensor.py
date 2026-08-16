@@ -54,12 +54,14 @@ class SmarthomesecBinarySensor(SmarthomesecBaseSensor, BinarySensorEntity):
             return self._device["status_open"][0] == "device_status.dc_open"
         # ✅ PIR-sensorer
         if self._device.get("type") == "device_type.pir":
+            # status_motion er alltid tom i praksis (målt 1261/1261 og 142/142
+            # 2026-08-16) – panelet fyller den ikke ut. Bevegelse finnes bare
+            # som et WS-event, så koordinatoren holder et kort tidsvindu.
+            # Feltet leses likevel først, i tilfelle et panel faktisk setter det.
             motion = self._device.get("status_motion")
             if motion:
                 return motion == "1"
-            # ✅ fallback: ingen signal = ingen bevegelse
-        return False
-        # ✅ fallback for alt annet
+            return self.coordinator.is_pir_active(self._attr_unique_id)
         return False
 
     @property

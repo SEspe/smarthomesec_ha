@@ -46,6 +46,7 @@ from .const import (
     ALARM_AREAS,
     ALARM_MODE_TRIGGERED,
     ALARM_TRIGGER_TTL,
+    PIR_MOTION_TTL,
     ALARM_EVENT_KEY,
     ALARM_EVENT_MAX_AGE,
     REPORT_EVENT_KEY,
@@ -783,14 +784,27 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
 
     def _set_pir_active(self, device_id):
+        """Flag a PIR as having just seen motion.
+
+        Lagrer et UTLØPSTIDSPUNKT, ikke en bool. To grunner:
+
+        1. is_on kan lese det direkte (før 0.1.14 skrev vi _pir_state uten at
+           noen leste det, mens is_on leste status_motion – et REST-felt som
+           panelet aldri fyller ut, så bevegelse var permanent "off").
+        2. Overlappende events kan ikke nullstille hverandre for tidlig. Med en
+           bool ville reset-tråden fra event nr. 1 slå av bevegelsen midt i
+           event nr. 2; en utløpstid forlenges bare.
+        """
         if not hasattr(self, "_pir_state"):
             self._pir_state = {}
 
-        self._pir_state[device_id] = True
+        self._pir_state[device_id] = time.monotonic() + PIR_MOTION_TTL
 
         def reset():
-            time.sleep(5)
-            self._pir_state[device_id] = False
+            # Vekk entiteten når vinduet er ute. Ingen skriving her – is_on
+            # sammenligner mot klokka – så en sen tråd kan ikke slå av en
+            # nyere bevegelse.
+            time.sleep(PIR_MOTION_TTL + 0.1)
             asyncio.run_coroutine_threadsafe(
                 self.async_request_refresh(),
                 self.hass.loop,
@@ -802,6 +816,11 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             self.async_request_refresh(),
             self.hass.loop,
         )
+
+    def is_pir_active(self, device_id) -> bool:
+        """True while device_id is inside its PIR_MOTION_TTL window."""
+        expiry = (getattr(self, "_pir_state", None) or {}).get(device_id)
+        return bool(expiry) and expiry > time.monotonic()
 
 
 #    def delayed_ws_restart(self, delay=20):
