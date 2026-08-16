@@ -146,11 +146,36 @@ relative to `/REST/v2/`; Yale's client uses `/yapi/api/...` for the same handler
 `model[].mode` is `disarm` | `arm` | `home`. **`"triggered"` has never been observed** — a
 sounding panel still reports `arm`.
 
-`model[].burglar` is **not understood**. Measured as `true` for all 42 armed samples and `false`
-for all 108 disarmed samples across an 8.5-hour log (⇒ "armed"), but during the 2026-08-16 test
-alarm it was `false` while armed a minute before the alarm and `true` while the alarm sounded.
-Both readings cannot be right. **Do not build on this field.** If the first reading is correct,
-treating it as "alarm" puts the panel in permanent alarm whenever it is armed.
+`model[].burglar` is **not understood, and it is not simply "armed".** Three measurements on the
+same panel, all reproducible from logs:
+
+| Date | State | `burglar` | Samples |
+|---|---|---|---|
+| 2026-08-09 | armed overnight, no alarm | **`true`** | 42 |
+| 2026-08-09 | disarmed | `false` | 33 |
+| 2026-08-16 | **armed 17 min, quiet, no alarm** | **`false`** | **8** |
+| 2026-08-16 | armed, alarm sounding | **`true`** | 1 |
+
+The 17-minute test was deliberate and is not vacuous — eight refreshes landed inside the armed
+window, including polls five and ten minutes in, and every one read `false`. So "armed ⇒ true"
+is refuted as a general rule, while the 42 armed `true` samples on 2026-08-09 are equally real.
+Something other than arm state drives it, and a short quiet arming is not enough to raise it.
+
+Two candidate readings survive, and the data contradicts each of them somewhere:
+
+- **"burglary protection fully engaged"** — i.e. armed *and* every burglary zone sealed. The
+  2026-08-09 arming was overnight with the house shut; the 2026-08-16 test ran while a door
+  contact appears to have been open much of the day. But `burglar` was `true` during the alarm at
+  a moment when a door had just opened, which this does not explain.
+- **"alarm active"** — fits 2026-08-16 exactly, and fails on 2026-08-09, where 42 consecutive
+  armed samples read `true` with no alarm anywhere in the log.
+
+The distinguishing experiment is a **long, quiet, fully-sealed arming** (e.g. overnight): if
+`burglar` goes `true` with no alarm, it is a state of the arming, not of an alarm.
+
+**Do not build on this field.** The one thing all four rows agree on is that it is `false` while
+disarmed, which is useless. Treating it as "alarm" would have been wrong on 2026-08-09; treating
+it as "armed" is wrong on 2026-08-16.
 
 `device_status[]` entries carry, among ~100 fields: `device_id` (e.g. `RF:0e25a110`), `no` (zone
 number), `area`, `type` (`device_type.door_contact`, `device_type.pir`, `device_type.door_lock`…),
