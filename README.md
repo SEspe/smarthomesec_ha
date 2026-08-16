@@ -22,9 +22,10 @@ change the host before the password** — and note that login is rate-limited pe
 Your provider's alarm central is real: arming, disarming and any test alarm reaches people who may
 dispatch a guard. Arrange test mode with them first.
 
-See [`docs/VESTA_API.md`](docs/VESTA_API.md) for the measured API: hosts, auth, endpoints, alarm
-detection via Contact ID, and the WebSocket protocol. Unofficial and unaffiliated with Climax,
-VESTA, or any alarm provider.
+See [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) for what entities you get, how a triggered
+alarm behaves and how to automate on it, and [`docs/VESTA_API.md`](docs/VESTA_API.md) for the
+measured API: hosts, auth, endpoints, alarm detection via Contact ID, and the WebSocket protocol.
+Unofficial and unaffiliated with Climax, VESTA, or any alarm provider.
 
 ## Installation-ha
 Under HACS -> Integrations, add custom repository "https://github.com/SEspe/smarthomesec_ha/ with Category "Integration". 
