@@ -148,3 +148,15 @@ CID_REASONS = {
 # Hvor lenge en alarm holdes i TRIGGERED uten ny bekreftelse. Latchen fjernes
 # uansett når REST melder disarm, eller når en restore-hendelse kommer.
 ALARM_TRIGGER_TTL = 300.0
+
+# Hvor lenge en PIR vises som "bevegelse" etter et DEVICE_STATUS-event.
+#
+# MÅLT 2026-08-16: status_motion er TOM i hver eneste prøve i begge logger
+# (1261/1261 over 8,5 t, 142/142 under alarmtesten) – også i refresher hentet
+# rett etter et PIR-event. Panelet fyller aldri feltet, så bevegelse finnes
+# KUN som et tilstandsløst DEVICE_STATUS-event på WS. Entiteten må derfor
+# syntetiseres: sett en utløpstid ved eventet, la is_on lese den.
+#
+# PIR-ene rapporterer uansett armeringsstatus – armering styrer bare panelets
+# respons (sresp_mode_<n> per enhet og modus), ikke rapporteringen.
+PIR_MOTION_TTL = 5.0
