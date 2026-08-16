@@ -15,6 +15,7 @@ from homeassistant.components.alarm_control_panel import AlarmControlPanelState
 from custom_components.smarthomesec import SmarthomesecCoordinator
 from custom_components.smarthomesec.alarm_control_panel import SmarthomesecAlarm
 from custom_components.smarthomesec.const import (
+    KNOWN_EVENT_TYPES,
     ALARM_EVENT_MAX_AGE,
     ALARM_TRIGGER_TTL,
     REST_POLL_INTERVAL,
@@ -375,3 +376,58 @@ def test_missing_report_record_is_harmless():
 
     assert coord.observe_report_record({}) is None
     assert coord.observe_report_record({"report_event_latest": None}) is None
+
+
+# ----------------------------------------------------------------------
+# Measured from the live test alarm, 2026-08-16 11:11 (see CLAUDE.md).
+# ----------------------------------------------------------------------
+
+
+def test_alarm_is_a_known_ws_event_type():
+    """The panel emits refreshed_type 'ALARM' when it fires — measured.
+
+    Until 0.1.13 it fell into the unknown branch and logged "please report if
+    this is an alarm event". It is one.
+    """
+    assert "ALARM" in KNOWN_EVENT_TYPES
+
+
+@pytest.mark.parametrize(
+    "cid_code, expected",
+    [
+        ("1406", "Cancel"),            # disarm during an alarm
+        ("1374", "Trouble closing"),
+        ("1401", "Open/close"),
+        ("1301", "AC loss"),
+        ("1602", "Periodic test"),
+    ],
+)
+def test_non_alarm_codes_read_as_words(cid_code, expected):
+    assert SmarthomesecCoordinator.cid_reason(cid_code) == expected
+    # ...and naming them must not make them trigger.
+    assert SmarthomesecCoordinator.classify_cid(cid_code) is None
+
+
+# ----------------------------------------------------------------------
+# model[].burglar: observation only, and deliberately not wired to anything.
+# Session 5 measured arm => True 42/42; the 2026-08-16 alarm measured armed
+# with burglar False a minute before it, and True during it. Unresolved.
+# ----------------------------------------------------------------------
+
+
+def test_burglar_transitions_are_logged_once_each():
+    coord = _primed()
+    coord._burglar_state = {}
+
+    assert coord.observe_burglar_field("1", "arm", False) is True
+    assert coord.observe_burglar_field("1", "arm", False) is False
+    assert coord.observe_burglar_field("1", "arm", True) is True
+    assert coord.observe_burglar_field("1", "disarm", False) is True
+
+
+def test_burglar_never_triggers_the_alarm():
+    coord = _primed()
+    coord._burglar_state = {}
+    coord.observe_burglar_field("1", "arm", True)
+
+    assert coord.is_area_triggered("1") is False
