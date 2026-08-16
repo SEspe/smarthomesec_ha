@@ -34,6 +34,50 @@ the password scheme.**
 The `portal.vestasecurity.eu/vesta/` path that web searches surface is a web-UI path, not an API
 base; it 404s.
 
+### Who this affects — alarm users in Norway
+
+**VESTA by Climax is white-labelled.** The panel on your wall carries your alarm company's
+branding, the ARC that answers it is your alarm company's, and the subscription is theirs — but
+the panel, the cloud, and the app are Climax's, shared with every other reseller. That is why an
+integration written for one Norwegian provider tends to work for another, and why the *only*
+thing that usually needs changing is the hostname.
+
+You are probably on this backend if:
+
+- your provider's phone app is **SmartHomeSec** (Climax's own app, also published as *Vesta Home*
+  in some regions), or a rebadged app that looks identical; or
+- your panel is a Climax/VESTA unit — HSGW, HPGW, VESTA-xxx, or a "Smart Home Controller" (SHC).
+
+Known and suspected users of this backend:
+
+| Provider | Evidence | Tenant |
+|---|---|---|
+| **Hønefoss Vaktselskap** (`alarm24.no`) | **First-hand.** This integration was written against their system, and both the legacy and current tenants were measured on it | historically `smartalarm.alarm24.no`; new accounts are provisioned on `portal.vestasecurity.eu` |
+| Other Norwegian resellers (e.g. Sikring24 is named in [Norwegian home-automation discussion](https://www.hjemmeautomasjon.no/forums/topic/8325-climax-vesta-integrasjon-alarm-system-sikring24-osv/) of Climax/Vesta) | Second-hand. Not verified here | unknown — try `portal.vestasecurity.eu` first |
+| Bydemes (distributor, Spain) | Runs `smarthomesec.bydemes.com` on the same backend | `smarthomesec.bydemes.com` |
+| Yale Smart Alarm (UK/EU, OEM) | Same Climax Home Portal Server, different auth — its open-source client is a useful reference | `mob.yalehomesystem.co.uk` |
+
+**Note that Hønefoss Vaktselskap moved tenants without announcing it.** Accounts created by the
+current app land on `portal.vestasecurity.eu`, while older accounts lived on
+`smartalarm.alarm24.no`. Nothing tells you which one you are on: the app just works, and the API
+returns the same `code 010 "Login failure!"` whether the password is wrong *or* the account
+simply does not exist on the host you asked. If your credentials work in the app but fail here,
+**change the host before you touch the password**, and mind the ~3-attempt per-IP lockout while
+testing.
+
+### If you are a user of another provider
+
+1. Try `portal.vestasecurity.eu` first — it is where the current app provisions accounts.
+2. If that fails, try your provider's own portal hostname (whatever their web login uses), then
+   `smartalarm.alarm24.no`.
+3. Three failures locks your IP out for five minutes, so change one thing at a time.
+4. Your provider's ARC is real. Arming, disarming and especially any panic/test alarm reaches
+   people who will dispatch a guard, and an unresolved callout is usually billable. **Arrange test
+   mode with your provider before triggering anything.**
+
+None of this is endorsed by, or affiliated with, Climax Technology, VESTA, Bydemes, Hønefoss
+Vaktselskap, or any other provider. It is an unofficial integration written by a customer.
+
 ## 2. Authentication
 
 ```
