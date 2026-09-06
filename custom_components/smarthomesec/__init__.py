@@ -49,6 +49,7 @@ from .const import (
     PIR_MOTION_TTL,
     ALARM_EVENT_KEY,
     ALARM_EVENT_MAX_AGE,
+    EVENT_TIME_FUTURE_TOLERANCE,
     REPORT_EVENT_KEY,
     REST_POLL_INTERVAL,
     CID_LENGTH,
@@ -771,12 +772,41 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
     @staticmethod
     def _alarm_event_time(event) -> float | None:
-        """utc_event_time as epoch seconds, if the panel gave a usable one."""
-        for key in ("utc_event_time", "time"):
+        """Event time as epoch seconds, preferring the SERVER's clock.
+
+        `time` og `utc_event_time` er begge epoch-sekunder, men kommer fra to
+        forskjellige klokker, og navnet lurer: `time` er serverens og treffer
+        øyeblikket WS-en pusher hendelsen på sekundet, mens `utc_event_time` er
+        PANELETS. Panelets RTC går for sakte – målt 150 s (2026-08-16) og
+        161–163 s (2026-09-06), altså ~0,6 s/døgn drift. Beviset er at
+        REPORT{'type':'ALARM'} kom kl. 12:44:43.830 og postens `time` er
+        12:44:43 blank, mens `utc_event_time` sier 12:42:01.
+
+        Det er ikke rapporteringsforsinkelse: samme avvik ligger på 1400/3401
+        open/close-poster, som verken har inngangsforsinkelse eller
+        alarmrapport-forsinkelse.
+
+        Til og med 0.1.15 leste vi panelklokka først, så hver alarm så ~162 s
+        eldre ut enn den var og spiste en fjerdedel av ALARM_EVENT_MAX_AGE
+        gratis – og andelen vokser med driften.
+
+        Panelklokka beholdes som fallback: den er nærmere sannheten enn ingen
+        tid i det hele tatt, og den brukes også hvis `time` skulle ligge
+        urimelig langt fram i tid (se EVENT_TIME_FUTURE_TOLERANCE).
+        """
+        stamps: dict[str, float] = {}
+        for key in ("time", "utc_event_time"):
             raw = str(event.get(key) or "").strip()
             if raw.isdigit():
-                return float(raw)
-        return None
+                stamps[key] = float(raw)
+
+        server = stamps.get("time")
+        panel = stamps.get("utc_event_time")
+
+        if server is not None and server - time.time() <= EVENT_TIME_FUTURE_TOLERANCE:
+            return server
+
+        return panel if panel is not None else server
 
     def _alarm_event_age(self, event) -> float | None:
         stamp = self._alarm_event_time(event)

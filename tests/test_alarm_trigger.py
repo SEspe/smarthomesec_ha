@@ -41,15 +41,28 @@ def _coordinator() -> SmarthomesecCoordinator:
     return coord
 
 
-def _record(report_id="900000001", cid="18113001007", cid_code="1130", age=5.0):
-    """An alarm record that happened `age` seconds ago."""
+# The panel's RTC runs slow and drifts; `time - utc_event_time` measured 140s
+# (2026-08-04, the BURGLARY fixture above), 150s (2026-08-16) and 161-163s
+# (2026-09-06) on this installation. Tests use the latest figure.
+PANEL_CLOCK_SKEW = 162.0
+
+
+def _record(
+    report_id="900000001", cid="18113001007", cid_code="1130", age=5.0, skew=0.0
+):
+    """An alarm record that happened `age` seconds ago by the SERVER's clock.
+
+    `skew` is how far the panel's clock lags the server's, i.e. how much older
+    the record looks if you read `utc_event_time` instead of `time`.
+    """
+    now = time.time()
     return {
         "report_id": report_id,
         "cid": cid,
         "cid_code": cid_code,
         "event_time": "",
-        "time": str(int(time.time() - age)),
-        "utc_event_time": str(int(time.time() - age)),
+        "time": str(int(now - age)),
+        "utc_event_time": str(int(now - age - skew)),
     }
 
 
@@ -326,6 +339,93 @@ def test_no_attributes_before_any_alarm():
 
 def test_poll_interval_fits_several_times_into_the_freshness_window():
     assert REST_POLL_INTERVAL * 2 <= ALARM_EVENT_MAX_AGE
+
+
+# ----------------------------------------------------------------------
+# Which clock the age is measured against. `time` and `utc_event_time` are
+# both epoch seconds but come from different clocks: `time` is the server's
+# and matches the moment the WS pushes the event to the second, while
+# `utc_event_time` is the PANEL's, and this panel's runs slow and drifting
+# (140s -> 150s -> 162s across three measurements). Reading the panel's made
+# every alarm look ~162s older than it was and quietly spent a quarter of the
+# freshness window. Measured 2026-09-06; fixed in 0.1.16.
+# ----------------------------------------------------------------------
+
+
+def test_age_is_measured_against_the_server_clock():
+    event = _record(age=5.0, skew=PANEL_CLOCK_SKEW)
+    coord = _coordinator()
+
+    age = coord._alarm_event_age(event)
+
+    assert age == pytest.approx(5.0, abs=2.0)
+
+
+def test_panel_clock_skew_no_longer_eats_the_freshness_window():
+    """An alarm inside the window by the server's clock, outside it by the panel's.
+
+    At ALARM_EVENT_MAX_AGE 600 and a 162s skew, everything older than ~438s
+    used to be discarded as history. That is less than two poll intervals, so
+    an alarm the WS missed could age out between polls.
+    """
+    age = ALARM_EVENT_MAX_AGE - 60
+    assert age + PANEL_CLOCK_SKEW > ALARM_EVENT_MAX_AGE, "fixture must straddle it"
+
+    coord = _primed()
+    coord.handle_alarm_record(
+        {"alarm_event_latest": _record(age=age, skew=PANEL_CLOCK_SKEW)}
+    )
+
+    assert coord.is_area_triggered("1") is True
+
+
+def test_two_full_poll_intervals_stay_inside_the_window_with_the_skew_applied():
+    """The ratio test above is only meaningful if the skew is not charged to it."""
+    coord = _primed()
+    coord.handle_alarm_record(
+        {
+            "alarm_event_latest": _record(
+                age=REST_POLL_INTERVAL * 2 - 1, skew=PANEL_CLOCK_SKEW
+            )
+        }
+    )
+
+    assert coord.is_area_triggered("1") is True
+
+
+def test_a_server_time_far_in_the_future_falls_back_to_the_panel_clock():
+    """Only Vesta has been measured. A tenant sending local-time-as-epoch would
+    put `time` a whole timezone ahead, and then the panel's clock is the lesser
+    evil — a future timestamp would make every record look infinitely fresh."""
+    event = _record(age=5.0, skew=PANEL_CLOCK_SKEW)
+    event["time"] = str(int(time.time() + 7200))
+    coord = _coordinator()
+
+    age = coord._alarm_event_age(event)
+
+    assert age == pytest.approx(5.0 + PANEL_CLOCK_SKEW, abs=2.0)
+
+
+def test_missing_server_time_falls_back_to_the_panel_clock():
+    event = _record(age=5.0, skew=PANEL_CLOCK_SKEW)
+    del event["time"]
+    coord = _coordinator()
+
+    assert coord._alarm_event_age(event) == pytest.approx(
+        5.0 + PANEL_CLOCK_SKEW, abs=2.0
+    )
+
+
+def test_missing_panel_time_still_uses_the_server_clock():
+    event = _record(age=5.0)
+    event["utc_event_time"] = ""
+    coord = _coordinator()
+
+    assert coord._alarm_event_age(event) == pytest.approx(5.0, abs=2.0)
+
+
+def test_no_usable_timestamp_at_all_gives_no_age():
+    assert _coordinator()._alarm_event_age({"report_id": "1"}) is None
 
 
 def test_an_alarm_seen_one_poll_late_still_latches():

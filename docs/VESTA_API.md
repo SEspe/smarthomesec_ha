@@ -165,8 +165,18 @@ slow.** Both are epoch seconds. On this installation `time - utc_event_time` was
 2026 and 161–163 s in September, i.e. **drifting ~0.6 s/day**. `time` matches the moment the
 WebSocket pushes the event, to the second; `utc_event_time` is that much in the past. It is not a
 reporting delay — the same offset appears on `1400`/`3401` open/close records, which have no entry
-delay and no burglar-report delay. **If you compute event freshness, use `time`**, or you silently
-lose that many seconds from your window, and progressively more as the panel drifts.
+delay and no burglar-report delay. Three samples from this installation, monotonic:
+
+| Record date | `time − utc_event_time` |
+|---|---|
+| 2026-08-04 | 140 s |
+| 2026-08-16 | 150 s |
+| 2026-09-06 | 161–163 s |
+
+**If you compute event freshness, use `time`**, or you silently lose that many seconds from your
+window, and progressively more as the panel drifts. Guard it: only Vesta has been measured, so a
+`time` implausibly far in the future is better treated as untrustworthy (a tenant sending
+local-time-as-epoch would put it a whole timezone ahead) and `utc_event_time` used instead.
 
 `model[].burglar` is **not simply "armed".** Measurements on the same panel, all reproducible from
 logs:
