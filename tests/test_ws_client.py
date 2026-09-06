@@ -16,9 +16,11 @@ HANDSHAKE = '{"sid":"abc","upgrades":[],"pingInterval":25000,"pingTimeout":5000}
 class _FakeCoordinator:
     def __init__(self):
         self.calls = []
+        self.senders = []
 
-    def callback(self, code, content):
+    def callback(self, code, content, sender=None):
         self.calls.append((code, content))
+        self.senders.append(sender)
 
 
 def _client():

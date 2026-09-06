@@ -90,7 +90,9 @@ POST /REST/v2/auth/login
 The password is **MD5**, lowercase hex. `login_entry` may be `web` or `app`.
 
 Authenticated calls present the token **twice** — as a `cookie` header and as a `token` header.
-POST responses may carry a **rotated** `token`, which the client must adopt.
+POST responses may carry a **rotated** `token`, which the client must adopt. **GET responses do
+not rotate** — the `token` in a `panel/cycle` response is byte-identical to the one sent, so a
+GET neither refreshes nor extends the token's lifetime.
 
 ### Token lifetime — the single most consequential fact
 
@@ -99,9 +101,21 @@ client. Measured lifetime: **~5 minutes** (5m02s and 5m03s from issue to rejecti
 
 Consequences:
 
-- REST calls return **HTTP 401** a few minutes into any idle period. Re-login and retry.
-- The WebSocket presents its token **only at connect time**, so a live socket is unaffected by
-  REST token rotation. Tearing down a healthy WS because a REST call 401'd is a bug, not hygiene.
+- REST calls return **HTTP 401** a few minutes into any idle period. Re-login and retry. Because
+  GET never extends the token, this happens on a fixed ~5 minute cadence no matter how often you
+  poll — a re-login every few minutes is structural, not a symptom.
+- The WebSocket presents its token **only at connect time**, so a live socket survives its own
+  token ageing out — measured at 8m36 of token age on a still-healthy connection.
+- **But a new `auth/login` invalidates the previous token server-side, and the server then drops
+  any socket still holding it.** Measured 2026-09-06: **59 out of 59** re-logins were followed
+  1.43–1.49 s later by `42["error","check token error!"]` on the live socket, with no token error
+  that was not preceded by a login. An earlier revision of this document claimed a live socket was
+  unaffected by REST token rotation; that is wrong, and acting on it cost 5.4% WS downtime.
+- So a client that re-logs in **must reconnect its WebSocket with the new token itself**, promptly.
+  Waiting for the server to drop the old socket and then backing off turns a ~2 s gap into ~20 s.
+  Note the corollary: the replacement connection may be up before the old socket finishes dying,
+  so tag inbound frames with their connection and ignore `check token error!` from a superseded one
+  — otherwise the dying socket tears down its own successor.
 
 ### Rate limiting
 

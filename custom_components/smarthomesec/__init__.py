@@ -231,6 +231,51 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         else:
             _LOGGER.debug("WS thread stopped")
 
+    def restart_ws_now(self) -> None:
+        """Bytt WS-forbindelsen til gjeldende self.token med én gang.
+
+        Et nytt token invaliderer det forrige på serversiden, og serveren
+        dropper socketen som fortsatt holder det gamle ~1,5s etterpå (målt
+        59/59 i loggen fra 2026-09-06, se "Protocol facts" i CLAUDE.md). Da er
+        det billigere å reconnecte selv umiddelbart enn å vente på at serveren
+        river ned linja og token-error-grenen sover av seg 20s backoff.
+
+        Ikke-blokkerende: stop_client() lukker socketen uten join. Kalles fra
+        executor-tråder (REST 401) – aldri fra event-loopen.
+        """
+        if self._shutdown:
+            _LOGGER.debug("WS restart skipped – entry is unloading")
+            return
+
+        if not self.token:
+            _LOGGER.debug("WS restart skipped – no token yet")
+            return
+
+        old = self.wsc
+
+        # Rekkefølgen betyr noe: den nye klienten må være self.wsc FØR vi stopper
+        # den gamle. Ellers står self.wsc som None i mellomtiden, og da slipper
+        # sperra i callback() gjennom en sen "check token error!" fra den gamle
+        # socketen – som ville planlagt nok en restart oppå den vi holder på med.
+        try:
+            new = WSClient(self, self.token)
+        except Exception as ex:
+            _LOGGER.error("Failed to create WS client with new token: %s", ex)
+            return
+
+        self.wsc = new
+
+        if old is not None:
+            try:
+                old.stop_client()
+            except Exception as ex:
+                _LOGGER.debug("Error while stopping previous WS client: %s", ex)
+
+        try:
+            new.start()
+        except Exception as ex:
+            _LOGGER.error("Failed to start WS with new token: %s", ex)
+
     def update_token(self, new_token):
         _LOGGER.debug("Updating REST token → restarting WS client")
 
@@ -239,20 +284,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             return
 
         self.token = new_token
-
-        # Stopp gammel WSClient helt
-        if self.wsc is not None:
-            try:
-                self.wsc.stop_client()
-            except Exception:
-                pass
-            self.wsc = None
-
-        # Start WSClient på nytt, identisk med login()
-        # La til IF her.  Blir den kjørt flere ganger?
-        if self.wsc is None and self.token:
-            self.wsc = WSClient(self, self.token)
-            self.wsc.start()
+        self.restart_ws_now()
 
 
 
@@ -325,13 +357,20 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     return self.data
             raise UpdateFailed(f"Error communicating with API: {err}") from err
 
-    def login(self, restart_ws: bool = True) -> None:
-        """Login to SmartHomeSec and (optionally) restart the WebSocket client.
+    def login(self, immediate_ws: bool = False) -> None:
+        """Login to SmartHomeSec and re-establish the WebSocket client.
 
-        REST-tokenet har ~5 min TTL, mens WS-tokenet bare presenteres ved connect
-        – en levende WS bryr seg ikke om at REST-tokenet rulleres. Derfor kaller
-        401-retry i _rest_call_get/_rest_call_post med restart_ws=False: de
-        trenger bare et friskt token, og skal ikke rive ned en frisk WS.
+        Det finnes ikke noe "login som lar en levende WS være i fred". En ny
+        auth/login invaliderer det forrige tokenet på serversiden, og serveren
+        dropper socketen som holder det ~1,5s senere – målt 59/59 i loggen fra
+        2026-09-06 (se "Protocol facts" i CLAUDE.md). Det eneste valget vi har
+        er om vi reconnecter selv, eller lar serveren rive ned linja først.
+
+        immediate_ws=False (default) – oppstart/ForceLogin: ingen WS lever
+            ennå, så vi bringer den opp via delayed_ws_restart(delay=2).
+        immediate_ws=True – 401-retry i _rest_call_get/_rest_call_post: her
+            lever det allerede en WS på det nå døde tokenet, og vi bytter den
+            med én gang. Det gjør blindvinduet ~2s i stedet for ~21s.
         """
 
         res = None
@@ -366,11 +405,12 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
             _LOGGER.debug("Token: %s", self.token)
 
-            if restart_ws:
+            if immediate_ws:
+                _LOGGER.debug("Token refreshed → swapping WS to the new token")
+                self.restart_ws_now()
+            else:
                 _LOGGER.debug("Starting WS after login via delayed restart")
                 self.delayed_ws_restart(delay=2)
-            else:
-                _LOGGER.debug("Token refreshed for REST – leaving WS untouched")
 
         except Exception as ex:
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
@@ -407,8 +447,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             status_code = res.status_code
             try:
                 if status_code == 401:
-                    # Kun nytt REST-token – WS lever videre på sitt eget token.
-                    self.login(restart_ws=False)
+                    # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
+                    self.login(immediate_ws=True)
                     loop += 1
             except Exception as ex:
                 raise Exception(f"Security error: {ex}") from ex
@@ -460,8 +500,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
             try:
                 if status_code == 401:
-                    # Kun nytt REST-token – WS lever videre på sitt eget token.
-                    self.login(restart_ws=False)
+                    # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
+                    self.login(immediate_ws=True)
                     loop += 1
                     continue
                 if status_code == 400:
@@ -866,7 +906,16 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
         threading.Thread(target=_restart, daemon=True).start()
 
-    def callback(self, message, data):
+    def callback(self, message, data, sender=None):
+        # En WSClient vi ikke lenger eier kan fortsatt levere meldinger en liten
+        # stund etter stop_client() – typisk "check token error!" fra socketen
+        # serveren dropper rett etter en re-login, når vi allerede har startet
+        # en ny forbindelse. Uten denne sperra river den gamle socketen ned den
+        # nye. Når self.wsc er None er vi midt i en restart og slipper gjennom.
+        if sender is not None and self.wsc is not None and sender is not self.wsc:
+            _LOGGER.debug("Ignoring message from stale WS client: code=%s", message)
+            return
+
         # 🔥 Token error → tving full login
 #        if message == "44" or ("check token error" in str(data)):
 #            _LOGGER.warning("WS token not ready – retrying with delay")
@@ -938,6 +987,14 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     self.delayed_ws_restart()
                 except Exception as e:
                     _LOGGER.error("Delayed WS restart failed: %s", e)
+
+            # Token-feilen kommer som en 42-frame (["error","check token
+            # error!"]). Uten denne return-en faller den videre ned i 42-grenen,
+            # som nullstiller _ws_token_errors – så telleren nådde aldri 2 og
+            # eskaleringen over var død kode. 42-grenen ville dessuten prøvd å
+            # json-parse "check token error!" og logget en villedende
+            # "WS parse error" for hver eneste tokenfeil.
+            return
 
 
 

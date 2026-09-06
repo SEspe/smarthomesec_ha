@@ -259,7 +259,7 @@ class WSClient(threading.Thread):
                         since_connect,
                     )
                     forced_login = True
-                    self.client.callback("ForceLogin", None)
+                    self.client.callback("ForceLogin", None, sender=self)
                     break
 
             # --------------------------------------------------
@@ -305,7 +305,7 @@ class WSClient(threading.Thread):
             LOG.error("Failed to send CONNECT: %s", e)
 
         # Ingen AUTH – SmartHomeSec bruker token i URL
-        self.client.callback("WebSocketConnect", None)
+        self.client.callback("WebSocketConnect", None, sender=self)
 
     def _on_error(self, ws, error):
         # opcode=8 er NORMAL disconnect fra SmartHomeSec
@@ -314,7 +314,7 @@ class WSClient(threading.Thread):
             return
 
         LOG.warning("WebSocket error: %s", error)
-        self.client.callback("WebSocketError", error)
+        self.client.callback("WebSocketError", error, sender=self)
 
     def _on_ping(self, ws, message):
         LOG.debug("WebSocket ping received")
@@ -361,4 +361,4 @@ class WSClient(threading.Thread):
         LOG.debug("WS received: code=%s content=%s", code, content)
 
         # Send videre til coordinator
-        self.client.callback(code, content)
+        self.client.callback(code, content, sender=self)
