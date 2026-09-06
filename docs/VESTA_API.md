@@ -160,6 +160,14 @@ relative to `/REST/v2/`; Yale's client uses `/yapi/api/...` for the same handler
 `model[].mode` is `disarm` | `arm` | `home`. **`"triggered"` has never been observed** — a
 sounding panel still reports `arm`.
 
+**Timestamps: `time` is the server's clock, `utc_event_time` is the panel's — and the panel's runs
+slow.** Both are epoch seconds. On this installation `time - utc_event_time` was 150 s in August
+2026 and 161–163 s in September, i.e. **drifting ~0.6 s/day**. `time` matches the moment the
+WebSocket pushes the event, to the second; `utc_event_time` is that much in the past. It is not a
+reporting delay — the same offset appears on `1400`/`3401` open/close records, which have no entry
+delay and no burglar-report delay. **If you compute event freshness, use `time`**, or you silently
+lose that many seconds from your window, and progressively more as the panel drifts.
+
 `model[].burglar` is **not simply "armed".** Measurements on the same panel, all reproducible from
 logs:
 
@@ -182,21 +190,27 @@ the owner confirms all door contacts were **closed** throughout the 17-minute te
 stayed `false` anyway. Nor does "alarm active", which fits 2026-08-16 exactly and fails against 42
 consecutive armed `true` samples on 2026-08-09 with no alarm anywhere in that log.
 
-**The leading hypothesis is alarm memory:** `burglar` latches when a burglar alarm occurs during
-an arming, and clears on disarm. On 2026-09-06 a real alarm fired at 12:42 (CID 1130); the panel
-stayed armed and read `true` on all 19 samples over the next 3h23m, then went `false` the moment
-it was disarmed. That fits every row except 2026-08-09's overnight `true` — and that row only
-conflicts if no alarm preceded it, which cannot be checked, because that log also begins
-mid-arming.
+**`burglar` is alarm memory for the current arming.** Settled on 2026-09-06 by a transition
+observed *inside a single unbroken arming* — the panel was armed from before 11:03 until 17:19
+with no disarm in between, and a real burglary alarm fired at 12:44:54:
 
-Duration — `burglar` being raised some time after arming rather than at the moment of arming —
-still fits the table too, since 2026-09-06's arming was also long. But duration cannot explain the
-alarm-instant `true` on 2026-08-16, and memory can.
+| Window (one unbroken arming) | `mode` | `burglar` | Samples |
+|---|---|---|---|
+| before the alarm | `arm` | **`false`** | 9 |
+| after the alarm | `arm` | **`true`** | 24 |
+| after the disarm | `disarm` | `false` | 66 |
 
-Two experiments separate them. Cheapest: **arm briefly after a disarm that followed an alarm** —
-`false` means memory, cleared by the disarm. Then: **a quiet multi-hour arming with no prior
-alarm**, which separates memory from duration. Until one of those is run, treat the field as
-unexplained.
+The only thing that changed at the transition was the alarm. Arming state, zone sealing and arm
+mode are all held constant by construction, which excludes every earlier hypothesis — including
+the "raised some time after arming" one this document previously carried.
+
+**So: `burglar` latches when a burglar alarm occurs during the current arming, and clears on
+disarm.** It explains why the field looked like "armed" in the first measurements: those logs
+began *after* an alarm within the same arming.
+
+**It is history, not a live flag.** It stays `true` long after the siren stops — the same trap
+`alarm_event_latest` sets. Useful as an attribute meaning "this arming has been breached"; wrong
+as a source for a `triggered` state.
 
 **Do not build on this field.** The one thing all four rows agree on is that it is `false` while
 disarmed, which is useless. Treating it as "alarm" would have been wrong on 2026-08-09; treating
