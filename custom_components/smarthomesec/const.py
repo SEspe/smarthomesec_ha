@@ -105,10 +105,23 @@ REPORT_EVENT_KEY = "report_event_latest"
 # under testalarmen. Det er ALARM-eventet som redder den, ikke dørklokka.
 REST_POLL_INTERVAL = 300
 
-# Hvor ferskt utc_event_time må være for at hendelsen skal regnes som live.
+# Hvor fersk hendelsen må være for å regnes som live.
 # Beskytter mot å utløse alarm på historikk – f.eks. ved oppstart mot en
 # gammel hendelse, eller hvis panelet spiller av en eldre rapport på nytt.
+#
+# Alderen måles mot `time` (serverens klokke), IKKE `utc_event_time` – se
+# _alarm_event_time. Til og med 0.1.15 leste vi panelets klokke, som på denne
+# installasjonen går ~162 s for sakte og drifter ~0,6 s/døgn: hver alarm så
+# dermed 162 s eldre ut enn den var, og det reelle vinduet var ~438 s av de
+# 600 – under to pollrunder, og krympende. Målt 2026-09-06.
 ALARM_EVENT_MAX_AGE = 600.0
+
+# Hvor langt inn i framtida `time` får ligge før vi mistror den og faller
+# tilbake på `utc_event_time`. Begge er epoch-sekunder, men vi har bare målt
+# det på Vesta: skulle en annen tenant sende lokaltid-som-epoch ville `time`
+# ligge en hel tidssone foran, og da er panelklokka det minste onde.
+# Toleransen skal dekke vanlig klokkeavvik mellom HA og serveren, ikke mer.
+EVENT_TIME_FUTURE_TOLERANCE = 60.0
 
 # Contact ID (Ademco). cid = MT(2) + QXYZ(4) + GG(2) + CCC(3), f.eks.
 # "18 1130 01 007" = melding 18, hendelse 1130, område 01, sone 007.
