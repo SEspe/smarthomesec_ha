@@ -160,8 +160,8 @@ relative to `/REST/v2/`; Yale's client uses `/yapi/api/...` for the same handler
 `model[].mode` is `disarm` | `arm` | `home`. **`"triggered"` has never been observed** — a
 sounding panel still reports `arm`.
 
-`model[].burglar` is **not understood, and it is not simply "armed".** Three measurements on the
-same panel, all reproducible from logs:
+`model[].burglar` is **not simply "armed".** Measurements on the same panel, all reproducible from
+logs:
 
 | Date | State | `burglar` | Samples |
 |---|---|---|---|
@@ -169,6 +169,8 @@ same panel, all reproducible from logs:
 | 2026-08-09 | disarmed | `false` | 33 |
 | 2026-08-16 | **armed 17 min, quiet, all zones sealed** | **`false`** | **8** |
 | 2026-08-16 | armed, alarm sounding | **`true`** | 1 |
+| 2026-09-06 | **armed, after a real burglary alarm** | **`true`** | **19** |
+| 2026-09-06 | disarmed, after that alarm | `false` | 107 |
 
 The 17-minute test was deliberate and is not vacuous — eight refreshes landed inside the armed
 window, including polls five and ten minutes in, and every one read `false`. So "armed ⇒ true"
@@ -180,15 +182,21 @@ the owner confirms all door contacts were **closed** throughout the 17-minute te
 stayed `false` anyway. Nor does "alarm active", which fits 2026-08-16 exactly and fails against 42
 consecutive armed `true` samples on 2026-08-09 with no alarm anywhere in that log.
 
-What separates the two armed-and-sealed cases is **duration**: 2026-08-09 was an overnight arming
-already in progress when the log began, 2026-08-16 was 17 minutes. So the leading remaining
-candidate is that `burglar` is raised some considerable time after arming — an "away/fully armed"
-state the panel settles into — rather than at the moment of arming. Unverified, and it does not
-explain the alarm-instant `true` either.
+**The leading hypothesis is alarm memory:** `burglar` latches when a burglar alarm occurs during
+an arming, and clears on disarm. On 2026-09-06 a real alarm fired at 12:42 (CID 1130); the panel
+stayed armed and read `true` on all 19 samples over the next 3h23m, then went `false` the moment
+it was disarmed. That fits every row except 2026-08-09's overnight `true` — and that row only
+conflicts if no alarm preceded it, which cannot be checked, because that log also begins
+mid-arming.
 
-The distinguishing experiment is an **ordinary overnight arming**: if `burglar` goes `true` with
-no alarm and every zone shut, it is a property of the arming and the alarm correlation was
-coincidence. Until then, treat the field as unexplained.
+Duration — `burglar` being raised some time after arming rather than at the moment of arming —
+still fits the table too, since 2026-09-06's arming was also long. But duration cannot explain the
+alarm-instant `true` on 2026-08-16, and memory can.
+
+Two experiments separate them. Cheapest: **arm briefly after a disarm that followed an alarm** —
+`false` means memory, cleared by the disarm. Then: **a quiet multi-hour arming with no prior
+alarm**, which separates memory from duration. Until one of those is run, treat the field as
+unexplained.
 
 **Do not build on this field.** The one thing all four rows agree on is that it is `false` while
 disarmed, which is useless. Treating it as "alarm" would have been wrong on 2026-08-09; treating
