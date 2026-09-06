@@ -189,29 +189,34 @@ def _login_response():
     return res
 
 
-def test_login_from_rest_401_refreshes_token_without_touching_ws():
-    """The REST token has a ~5min TTL; the WS only presents its token at connect.
+def test_login_from_rest_401_swaps_the_ws_to_the_new_token():
+    """A new login invalidates the token the live socket holds.
 
-    So a 401-triggered re-login must leave a healthy WS alone — restarting it
-    was the cause of the ~10min reconnect churn.
+    Measured 2026-09-06: 59/59 re-logins were followed ~1.5s later by the
+    server dropping the WS with "check token error!". So the 401 retry cannot
+    leave the WS alone — it must reconnect it itself, which is what turns a
+    ~21s blind window (server drop + 20s backoff) into ~2s.
     """
     coord = _login_coordinator()
-    wsc = MagicMock()
-    coord.wsc = wsc
+    old_wsc = MagicMock()
+    coord.wsc = old_wsc
 
     with patch(
         "custom_components.smarthomesec.requests.post", return_value=_login_response()
-    ), patch.object(SmarthomesecCoordinator, "delayed_ws_restart") as mock_restart:
-        coord.login(restart_ws=False)
+    ), patch.object(SmarthomesecCoordinator, "delayed_ws_restart") as mock_restart, patch(
+        "custom_components.smarthomesec.WSClient"
+    ) as mock_ws:
+        coord.login(immediate_ws=True)
 
-    mock_restart.assert_not_called()
-    wsc.stop_client.assert_not_called()
-    assert coord.wsc is wsc  # same live connection
+    mock_restart.assert_not_called()  # no waiting out the 20s backoff
+    old_wsc.stop_client.assert_called_once()
+    mock_ws.assert_called_once_with(coord, "new-token")
+    assert coord.wsc is mock_ws.return_value
     assert coord.token == "new-token"
 
 
-def test_login_restarts_ws_by_default():
-    """Setup, token errors and ForceLogin all rely on login() bringing the WS up."""
+def test_login_defers_ws_start_by_default():
+    """Setup and ForceLogin have no live WS to swap — bring one up via the timer."""
     coord = _login_coordinator()
 
     with patch(
@@ -250,3 +255,115 @@ def test_update_token_ignored_after_shutdown():
     mock_ws.assert_not_called()
     assert coord.wsc is None
     assert coord.token == "old"  # untouched while unloading
+
+
+def _callback_coordinator():
+    """A coordinator with just the attributes callback() reads for a 42 frame."""
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord._shutdown = False
+    coord.token = "tok"
+    coord.wsc = None
+    coord._ws_token_errors = 0
+    return coord
+
+
+def test_stale_ws_client_cannot_tear_down_the_current_one():
+    """The socket the server drops after a re-login must not kill its successor.
+
+    restart_ws_now() starts a new client immediately, but the old socket can
+    still deliver "check token error!" afterwards. Acting on it would stop the
+    connection we just brought up.
+    """
+    coord = _callback_coordinator()
+    current = MagicMock()
+    coord.wsc = current
+    stale = MagicMock()
+
+    coord.callback("42", '["error","check token error!"]', sender=stale)
+
+    current.stop_client.assert_not_called()
+    assert coord.wsc is current
+    assert coord._ws_token_errors == 0
+
+
+def test_token_error_does_not_reset_its_own_counter():
+    """The error arrives as a 42 frame; falling through reset the counter to 0.
+
+    That made the "second error forces a login" escalation unreachable, and
+    logged a misleading "WS parse error" for every token error.
+    """
+    coord = _callback_coordinator()
+    coord.wsc = MagicMock()
+
+    with patch.object(SmarthomesecCoordinator, "delayed_ws_restart") as mock_restart:
+        coord.callback("42", '["error","check token error!"]', sender=coord.wsc)
+
+    mock_restart.assert_called_once()
+    assert coord._ws_token_errors == 1
+
+
+def test_second_token_error_forces_a_login():
+    """With the counter no longer self-resetting, the escalation is live again."""
+    coord = _callback_coordinator()
+    coord._ws_token_errors = 1
+    coord.wsc = MagicMock()
+
+    with patch.object(SmarthomesecCoordinator, "login") as mock_login, patch.object(
+        SmarthomesecCoordinator, "delayed_ws_restart"
+    ) as mock_restart:
+        coord.callback("42", '["error","check token error!"]', sender=coord.wsc)
+
+    mock_login.assert_called_once()
+    mock_restart.assert_not_called()
+    assert coord._ws_token_errors == 0
+
+
+def test_restart_ws_now_swaps_the_client():
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord._shutdown = False
+    coord.token = "fresh"
+    old = MagicMock()
+    coord.wsc = old
+
+    with patch("custom_components.smarthomesec.WSClient") as mock_ws:
+        coord.restart_ws_now()
+
+    old.stop_client.assert_called_once()
+    mock_ws.assert_called_once_with(coord, "fresh")
+    mock_ws.return_value.start.assert_called_once()
+    assert coord.wsc is mock_ws.return_value
+
+
+def test_restart_ws_now_installs_the_new_client_before_stopping_the_old():
+    """Otherwise self.wsc is None in between and the stale-sender guard opens.
+
+    A late "check token error!" from the dying socket would then be acted on and
+    schedule a restart on top of the one already in progress.
+    """
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord._shutdown = False
+    coord.token = "fresh"
+    old = MagicMock()
+    coord.wsc = old
+
+    seen = []
+    old.stop_client.side_effect = lambda: seen.append(coord.wsc)
+
+    with patch("custom_components.smarthomesec.WSClient") as mock_ws:
+        coord.restart_ws_now()
+
+    assert seen == [mock_ws.return_value], "old client stopped before the swap"
+
+
+def test_restart_ws_now_ignored_after_shutdown():
+    """A 401 retry racing with unload must not resurrect the WS thread."""
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord._shutdown = True
+    coord.token = "fresh"
+    coord.wsc = None
+
+    with patch("custom_components.smarthomesec.WSClient") as mock_ws:
+        coord.restart_ws_now()
+
+    mock_ws.assert_not_called()
+    assert coord.wsc is None
