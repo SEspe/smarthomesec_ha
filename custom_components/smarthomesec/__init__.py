@@ -837,7 +837,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
     def set_alarm_mode(self, area, mode, pin):
         payload = {
             "area": int(area),
-            "pincode": int(pin),
+            "pin": int(pin),
             "mode": mode,
             "format": 1,
         }
