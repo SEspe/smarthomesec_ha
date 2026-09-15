@@ -12,10 +12,16 @@
     },
     "error": {
       "cannot_connect": "Cannot connect",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "invalid_auth": "Invalid credentials, or the account is not on this provider's server",
+      "rate_limited": "Too many failed login attempts. Wait 5 minutes before trying again."
     },
     "abort": {
-      "already_configured": "Already configured"
+      "already_configured": "Already configured",
+      "invalid_auth": "Invalid credentials, or the account is not on this provider's server",
+      "rate_limited": "Too many failed login attempts. Wait 5 minutes before trying again.",
+      "cannot_connect": "Cannot connect",
+      "unknown": "Unknown"
     }
   },
   "issues": {

@@ -90,7 +90,9 @@ POST /REST/v2/auth/login
 The password is **MD5**, lowercase hex. `login_entry` may be `web` or `app`.
 
 Authenticated calls present the token **twice** — as a `cookie` header and as a `token` header.
-POST responses may carry a **rotated** `token`, which the client must adopt.
+POST responses may carry a **rotated** `token`, which the client must adopt. **GET responses do
+not rotate** — the `token` in a `panel/cycle` response is byte-identical to the one sent, so a
+GET neither refreshes nor extends the token's lifetime.
 
 ### Token lifetime — the single most consequential fact
 
@@ -99,9 +101,21 @@ client. Measured lifetime: **~5 minutes** (5m02s and 5m03s from issue to rejecti
 
 Consequences:
 
-- REST calls return **HTTP 401** a few minutes into any idle period. Re-login and retry.
-- The WebSocket presents its token **only at connect time**, so a live socket is unaffected by
-  REST token rotation. Tearing down a healthy WS because a REST call 401'd is a bug, not hygiene.
+- REST calls return **HTTP 401** a few minutes into any idle period. Re-login and retry. Because
+  GET never extends the token, this happens on a fixed ~5 minute cadence no matter how often you
+  poll — a re-login every few minutes is structural, not a symptom.
+- The WebSocket presents its token **only at connect time**, so a live socket survives its own
+  token ageing out — measured at 8m36 of token age on a still-healthy connection.
+- **But a new `auth/login` invalidates the previous token server-side, and the server then drops
+  any socket still holding it.** Measured 2026-09-06: **59 out of 59** re-logins were followed
+  1.43–1.49 s later by `42["error","check token error!"]` on the live socket, with no token error
+  that was not preceded by a login. An earlier revision of this document claimed a live socket was
+  unaffected by REST token rotation; that is wrong, and acting on it cost 5.4% WS downtime.
+- So a client that re-logs in **must reconnect its WebSocket with the new token itself**, promptly.
+  Waiting for the server to drop the old socket and then backing off turns a ~2 s gap into ~20 s.
+  Note the corollary: the replacement connection may be up before the old socket finishes dying,
+  so tag inbound frames with their connection and ignore `check token error!` from a superseded one
+  — otherwise the dying socket tears down its own successor.
 
 ### Rate limiting
 
@@ -146,8 +160,26 @@ relative to `/REST/v2/`; Yale's client uses `/yapi/api/...` for the same handler
 `model[].mode` is `disarm` | `arm` | `home`. **`"triggered"` has never been observed** — a
 sounding panel still reports `arm`.
 
-`model[].burglar` is **not understood, and it is not simply "armed".** Three measurements on the
-same panel, all reproducible from logs:
+**Timestamps: `time` is the server's clock, `utc_event_time` is the panel's — and the panel's runs
+slow.** Both are epoch seconds. On this installation `time - utc_event_time` was 150 s in August
+2026 and 161–163 s in September, i.e. **drifting ~0.6 s/day**. `time` matches the moment the
+WebSocket pushes the event, to the second; `utc_event_time` is that much in the past. It is not a
+reporting delay — the same offset appears on `1400`/`3401` open/close records, which have no entry
+delay and no burglar-report delay. Three samples from this installation, monotonic:
+
+| Record date | `time − utc_event_time` |
+|---|---|
+| 2026-08-04 | 140 s |
+| 2026-08-16 | 150 s |
+| 2026-09-06 | 161–163 s |
+
+**If you compute event freshness, use `time`**, or you silently lose that many seconds from your
+window, and progressively more as the panel drifts. Guard it: only Vesta has been measured, so a
+`time` implausibly far in the future is better treated as untrustworthy (a tenant sending
+local-time-as-epoch would put it a whole timezone ahead) and `utc_event_time` used instead.
+
+`model[].burglar` is **not simply "armed".** Measurements on the same panel, all reproducible from
+logs:
 
 | Date | State | `burglar` | Samples |
 |---|---|---|---|
@@ -155,6 +187,8 @@ same panel, all reproducible from logs:
 | 2026-08-09 | disarmed | `false` | 33 |
 | 2026-08-16 | **armed 17 min, quiet, all zones sealed** | **`false`** | **8** |
 | 2026-08-16 | armed, alarm sounding | **`true`** | 1 |
+| 2026-09-06 | **armed, after a real burglary alarm** | **`true`** | **19** |
+| 2026-09-06 | disarmed, after that alarm | `false` | 107 |
 
 The 17-minute test was deliberate and is not vacuous — eight refreshes landed inside the armed
 window, including polls five and ten minutes in, and every one read `false`. So "armed ⇒ true"
@@ -166,15 +200,27 @@ the owner confirms all door contacts were **closed** throughout the 17-minute te
 stayed `false` anyway. Nor does "alarm active", which fits 2026-08-16 exactly and fails against 42
 consecutive armed `true` samples on 2026-08-09 with no alarm anywhere in that log.
 
-What separates the two armed-and-sealed cases is **duration**: 2026-08-09 was an overnight arming
-already in progress when the log began, 2026-08-16 was 17 minutes. So the leading remaining
-candidate is that `burglar` is raised some considerable time after arming — an "away/fully armed"
-state the panel settles into — rather than at the moment of arming. Unverified, and it does not
-explain the alarm-instant `true` either.
+**`burglar` is alarm memory for the current arming.** Settled on 2026-09-06 by a transition
+observed *inside a single unbroken arming* — the panel was armed from before 11:03 until 17:19
+with no disarm in between, and a real burglary alarm fired at 12:44:54:
 
-The distinguishing experiment is an **ordinary overnight arming**: if `burglar` goes `true` with
-no alarm and every zone shut, it is a property of the arming and the alarm correlation was
-coincidence. Until then, treat the field as unexplained.
+| Window (one unbroken arming) | `mode` | `burglar` | Samples |
+|---|---|---|---|
+| before the alarm | `arm` | **`false`** | 9 |
+| after the alarm | `arm` | **`true`** | 24 |
+| after the disarm | `disarm` | `false` | 66 |
+
+The only thing that changed at the transition was the alarm. Arming state, zone sealing and arm
+mode are all held constant by construction, which excludes every earlier hypothesis — including
+the "raised some time after arming" one this document previously carried.
+
+**So: `burglar` latches when a burglar alarm occurs during the current arming, and clears on
+disarm.** It explains why the field looked like "armed" in the first measurements: those logs
+began *after* an alarm within the same arming.
+
+**It is history, not a live flag.** It stays `true` long after the siren stops — the same trap
+`alarm_event_latest` sets. Useful as an attribute meaning "this arming has been breached"; wrong
+as a source for a `triggered` state.
 
 **Do not build on this field.** The one thing all four rows agree on is that it is `false` while
 disarmed, which is useless. Treating it as "alarm" would have been wrong on 2026-08-09; treating

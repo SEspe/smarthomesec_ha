@@ -12,10 +12,16 @@
     },
     "error": {
       "cannot_connect": "Cannot connect",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "invalid_auth": "Feil brukernavn/passord, eller kontoen ligger ikke hos denne leverandøren",
+      "rate_limited": "For mange mislykkede innlogginger. Vent 5 minutter før du prøver igjen."
     },
     "abort": {
-      "already_configured": "Already configured"
+      "already_configured": "Already configured",
+      "invalid_auth": "Feil brukernavn/passord, eller kontoen ligger ikke hos denne leverandøren",
+      "rate_limited": "For mange mislykkede innlogginger. Vent 5 minutter før du prøver igjen.",
+      "cannot_connect": "Cannot connect",
+      "unknown": "Unknown"
     }
   },
   "issues": {
