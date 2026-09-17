@@ -234,8 +234,33 @@ number), `area`, `type` (`device_type.door_contact`, `device_type.pir`, `device_
 ### `panel/mode` — arming
 
 ```
-POST /REST/v2/panel/mode    area=1&mode=arm|home|disarm&pin=<user PIN>
+POST /REST/v2/panel/mode    area=1&mode=arm|home|disarm&pincode=<user PIN>&format=1
 ```
+
+**The PIN field is `pincode`, not `pin`.** An earlier revision of this document said `pin`; that
+was wrong and matched no client. Measured here on 2026-08-16 across three round trips — arm,
+disarm, arm — each answered `{"result": true, "code": "000", "message": "OK!"}` and each followed
+by the Contact ID record that proves the panel actually changed state (`3401` Close on arm,
+`1401` Open on disarm), not merely that the request was accepted.
+
+Corroborated independently: `secure4home-homeassistant` (BP HomeConnect, `eu.bphomeconnect.com`,
+another reseller of this same backend) posts `{"area", "mode", "pincode"}` to the same endpoint.
+The Yale client sends **no PIN at all** — just `{"area", "mode"}` — so Yale cannot be cited for
+either spelling.
+
+`format=1` is sent here and accepted although Yale omits it, which shows the server **tolerates
+fields it does not recognise** on this tenant.
+
+**Unresolved: whether the server validates the PIN or ignores the field.** Both readings fit the
+measurement above, because a tenant that ignores `pincode` and a tenant that reads it are
+indistinguishable from a successful arm. It matters, because an external report
+([PR #20](https://github.com/SEspe/smarthomesec_ha/pull/20)) describes a panel that *denied* the
+arm with this payload. Until a failing response body is in hand, do not assume the field is inert
+and do not rename it.
+
+*(Inferred, not measured: the PIN is a string of digits and leading zeros are presumably
+significant — the panel's own Contact ID user field is zero-padded — so it should be sent
+verbatim rather than parsed as an integer.)*
 
 ## 4. Alarm detection
 
