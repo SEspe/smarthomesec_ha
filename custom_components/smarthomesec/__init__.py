@@ -835,9 +835,29 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         return True
 
     def set_alarm_mode(self, area, mode, pin):
+        """Arm/disarm et område. PIN-en sendes som STRENG, ikke tall.
+
+        Feltet heter `pincode` – målt 2026-08-16 mot dette panelet, og bekreftet
+        av secure4home/BP HomeConnect som kjører samme Climax-backend. (Yale,
+        samme backend, sender ingen PIN i det hele tatt, så den kan ikke brukes
+        som kilde for noen av skrivemåtene.) Se docs/VESTA_API.md.
+
+        int(pin) var feil på to måter:
+
+        1. Den spiste en ledende null. PIN-er er SIFFERSTRENGER, ikke tall –
+           "0123" ble sendt som "123", og en bruker med PIN som starter på 0
+           kunne ikke armere fra HA i det hele tatt. Panelets eget Contact
+           ID-brukerfelt er nullpadda; det er hintet.
+        2. Den kastet TypeError på None. alarm_disarm(code=None) er et lovlig
+           HA-kall – code_arm_required styrer bare ARMERING – så en disarm uten
+           kode ga et ubehandlet unntak i stedet for et svar fra panelet.
+
+        NB: om serveren i det hele tatt VALIDERER PIN-en er fortsatt uavklart
+        (se PR #20). Det endrer ikke at å sende "0123" som 123 er feil.
+        """
         payload = {
             "area": int(area),
-            "pincode": int(pin),
+            "pincode": "" if pin is None else str(pin),
             "mode": mode,
             "format": 1,
         }
