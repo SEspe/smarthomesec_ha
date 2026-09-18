@@ -108,8 +108,13 @@ The binary sensors work independently of the panel state, which is useful while 
 
 ## Arming and disarming from Home Assistant
 
-The entity requires a numeric code, so the standard card gives you a keypad. The digits are passed
-straight through to the panel as the user PIN.
+The entity requires a numeric code, so the standard card gives you a keypad. The digits are sent
+to the panel as the user PIN, in the `pincode` field of a `panel/mode` POST.
+
+⚠️ **A PIN that starts with `0` is not sent correctly.** The code converts it to an integer before
+sending, which drops the leading zero — `0123` goes out as `123`. If your PIN begins with a zero and
+arming from Home Assistant fails while the app works, this is why. Tracked as a known issue; a PIN
+without a leading zero is unaffected.
 
 ```yaml
 type: alarm-panel
@@ -136,6 +141,9 @@ secret, if that matters to you.
 - **`triggered` is detected, not authoritative.** The panel never reports "triggered" over its
   API; the state is derived from a new alarm record (see `docs/VESTA_API.md`). It clears on any
   disarm, even one that did not follow an alarm.
+- **A leading zero in your PIN is dropped** before the request is sent (see above). Whether that
+  actually blocks arming depends on whether your provider's server validates the PIN at all, which
+  is not established — a panel that ignores the field will arm regardless.
 - **This is cloud-dependent** — your internet, the provider's backend, and a live WebSocket. Fine
   for notifications, lights and automations. **Not** a substitute for your alarm company's
   monitoring, and not life-safety equipment.
