@@ -44,7 +44,7 @@ TYPE_CLASS_BINARY_SENSOR = {
     "device_type.pir": BinarySensorDeviceClass.MOTION,
 }
 
-ALARM_AREAS = ["1","2","3"]
+ALARM_AREAS = ["1"]
 
 # --- Utløst alarm (TRIGGERED) ------------------------------------------------
 #
