@@ -34,7 +34,17 @@ Python 3.7+, standard library only. Nothing to install.
     cd tools\mode_probe
     py mode_probe.py --user YOUR_ACCOUNT
 
-or just double-click run.cmd, which prompts for the account and does the same.
+or double-click run.cmd, which prompts for the account and does the same.
+
+NOTE THE .\ IF YOU TYPE IT IN A CMD WINDOW:
+
+    .un.cmd YOUR_ACCOUNT --out result.txt
+
+Windows can be configured with NoDefaultCurrentDirectoryInExePath=1, which
+stops cmd searching the current directory for a program. On such a machine a
+bare `run.cmd` gives "'run.cmd' is not recognized as an internal or external
+command" even while you are standing in this folder. `.un.cmd` always works,
+and so does calling the script directly with `py`.
 
 See the payload matrix without touching the network or your alarm:
 
