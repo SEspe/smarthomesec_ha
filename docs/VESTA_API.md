@@ -251,16 +251,29 @@ either spelling.
 `format=1` is sent here and accepted although Yale omits it, which shows the server **tolerates
 fields it does not recognise** on this tenant.
 
-**Unresolved: whether the server validates the PIN or ignores the field.** Both readings fit the
-measurement above, because a tenant that ignores `pincode` and a tenant that reads it are
-indistinguishable from a successful arm. It matters, because an external report
-([PR #20](https://github.com/SEspe/smarthomesec_ha/pull/20)) describes a panel that *denied* the
-arm with this payload. Until a failing response body is in hand, do not assume the field is inert
-and do not rename it.
+**`pincode` is optional, and validated only when sent.** Measured with `tools/mode_probe` on
+2026-09-22, for `arm`, `home` and `disarm` alike:
 
-*(Inferred, not measured: the PIN is a string of digits and leading zeros are presumably
-significant — the panel's own Contact ID user field is zero-padded — so it should be sent
-verbatim rather than parsed as an integer.)*
+| | `pincode` correct | `pincode` wrong | `pincode` absent |
+|---|---|---|---|
+| `arm` / `home` | 200, arms | 400 | 200, arms |
+| `disarm` | 200, disarms | 400 `code 996 "PIN Code Error"` | 200, disarms |
+
+This looks like platform behaviour rather than an oversight: the Yale client for this same backend
+never sends a PIN, `secure4home` (BP HomeConnect) always does, and both work. The server is plainly
+able to refuse — a wrong PIN on a disarm is rejected and the panel stays armed — so the field is
+checked when present and skipped when absent.
+
+**This integration always sends `pincode`, so the check applies.** Two things follow for anyone
+working on it. A field name the server does not recognise is equivalent to sending no PIN at all,
+which is why `pin` "works" and why renaming the field is not a fix — see
+[PR #20](https://github.com/SEspe/smarthomesec_ha/pull/20). And because the account credentials are
+what authenticate an API call, that password is what protects the panel here; see
+`HOME_ASSISTANT.md`.
+
+**The PIN is a string of digits and leading zeros are significant** — the panel's own Contact ID
+user field is zero-padded. Send it verbatim; parsing it as an integer turns `0123` into `123` and
+earns the 400 above. This integration did exactly that until 0.1.18.
 
 **A wrong PIN is rejected with HTTP 400 — measured 2026-09-22.** This is the one place the API
 breaks its own pattern, and it is worth stating plainly because it inverts the obvious reading of a
@@ -284,9 +297,9 @@ Two consequences:
 - **The server really does validate the PIN.** It is not a decorative field, and anything that
   causes the PIN to be sent wrong — such as parsing it as an integer and losing a leading zero,
   which this integration did until 0.1.18 — produces exactly this 400.
-- **If a request that omits `pincode` entirely is accepted, that is the check being bypassed**, not
-  a different spelling being correct. Unverified, and it matters: see
-  [PR #20](https://github.com/SEspe/smarthomesec_ha/pull/20).
+- **A 400 here says nothing about the field names.** A request the server dislikes structurally
+  would look the same, so the two have to be told apart by experiment rather than by reading the
+  status — which is what `tools/mode_probe` is for, and what the table above records.
 
 **CID 3456 = Partial Arm** (qualifier 3 = close), emitted by `mode=home`. `3401` is a full arm and
 `1401` the matching disarm/open. For these 4xx open/close codes the last three digits are the
