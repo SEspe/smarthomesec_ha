@@ -17,3 +17,9 @@ htmlcov/
 CLAUDE.md
 SESSION_NOTES.md
 .claude/
+
+# Probe output. The tools in tools/ write their reports next to themselves
+# with --out. They carry no PIN and no token by design, but they are run
+# artefacts from somebody's live alarm account and do not belong in the repo.
+tools/*/result.txt
+tools/*/*.out
