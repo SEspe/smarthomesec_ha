@@ -395,7 +395,9 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             )
 
             if res.status_code != 200:
-                raise Exception(f"Status: {res.status_code}")
+                raise Exception(
+                    f"HTTP {res.status_code} – {self._server_said(res)}"
+                )
         except Exception as ex:
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
@@ -417,6 +419,42 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
         _LOGGER.debug("Logged in")
+
+    @staticmethod
+    def _server_said(res) -> str:
+        """Hva serveren faktisk svarte, kort nok til én loggline og trygt å dele.
+
+        Fantes ikke før 0.1.19, og det kostet oss en hel måned: PR #20 meldte
+        `POST response: <Response [400]>` og INGENTING mer, fordi 400-grenen
+        kastet "Security error" uten å lese kroppen. Vi kunne ikke se om
+        serveren klaget på feltnavnet, PIN-en, området eller noe helt fjerde.
+
+        MERK hva en 400 betyr her: dette API-et melder LOGISKE feil som HTTP
+        200 med en kode ulik "000" (010 login, 018/044 utestengt). En 400 når
+        aldri det kodespråket – den betyr at forespørselen ble avvist på
+        FORMEN, før noen PIN ble vurdert. De to må ikke forveksles.
+
+        `token` gjengis bevisst ALDRI. Feilmeldingen havner i brukerens logg,
+        og brukeren limer loggen inn i et offentlig GitHub-issue.
+        """
+        safe_keys = ("code", "message", "result", "error", "reason", "status")
+
+        if res is None:
+            return "no response"
+
+        try:
+            body = res.json()
+        except Exception:
+            text = (getattr(res, "text", "") or "").strip()
+            return f"non-JSON body: {text[:300]}" if text else "empty body"
+
+        if isinstance(body, dict):
+            named = [f"{key}={body[key]!r}" for key in safe_keys if key in body]
+            if named:
+                return ", ".join(named)
+            return f"JSON body with no recognised error field (keys: {', '.join(sorted(body))})"
+
+        return f"JSON body: {str(body)[:300]}"
 
     def _rest_call_get(self, path: str):
         res = None
@@ -446,16 +484,28 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
             status_code = res.status_code
-            try:
-                if status_code == 401:
-                    # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
-                    self.login(immediate_ws=True)
-                    loop += 1
-            except Exception as ex:
-                raise Exception(f"Security error: {ex}") from ex
+
+            if status_code == 401:
+                # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
+                self.login(immediate_ws=True)
+                loop += 1
+                continue
+
+            # Alt annet enn 200/401 er endelig. UTEN denne grenen spant løkka
+            # for alltid: `loop` økes bare i 401-grenen, så en 400/403/500
+            # oppfylte `status_code != 200 and loop < 2` i det uendelige og
+            # hamret serveren. Funnet 2026-09-22 av en test som ga GET en 403
+            # – aldri observert i produksjon, fordi panelet i praksis bare
+            # svarer 200 eller 401 på GET.
+            if status_code != 200:
+                break
 
         if status_code != 200:
-            raise Exception(f"Status: {res.status_code} / {self.token} / {self.userid}")
+            said = self._server_said(res)
+            _LOGGER.error(
+                "GET %s failed: HTTP %s – server said: %s", path, status_code, said
+            )
+            raise Exception(f"GET {path} failed: HTTP {status_code} – {said}")
 
         try:
             json_dict = res.json()
@@ -499,28 +549,29 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
             status_code = res.status_code
 
-            try:
-                if status_code == 401:
-                    # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
-                    self.login(immediate_ws=True)
-                    loop += 1
-                    continue
-                if status_code == 400:
-                    raise Exception("Security error")
-            except Exception as ex:
-                raise Exception(f"Security error: {ex}") from ex
+            if status_code == 401:
+                # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
+                self.login(immediate_ws=True)
+                loop += 1
+                continue
 
             if status_code != 200:
+                # 400 har ingen egen gren lenger. Den var aldri noe annet enn
+                # "ikke 200", og den gamle "Security error" fortalte hverken
+                # oss eller brukeren hva serveren mente. Se _server_said.
+                #
+                # Feltnavnene logges, verdiene ikke: navnene er nettopp det
+                # som står på spill i pincode/pin-saken (PR #20), mens
+                # verdiene inneholder brukerens PIN.
+                said = self._server_said(res)
                 _LOGGER.error(
-                    "Status: %s / %s / %s / %s",
-                    res.status_code,
-                    self.token,
-                    self.userid,
-                    res.json(),
+                    "POST %s failed: HTTP %s – server said: %s (sent fields: %s)",
+                    path,
+                    status_code,
+                    said,
+                    ", ".join(sorted(payload)),
                 )
-                raise Exception(
-                    f"Status: {res.status_code} / {self.token} / {self.userid}"
-                )
+                raise Exception(f"POST {path} failed: HTTP {status_code} – {said}")
 
         # -----------------------------
         # PARSE JSON + TOKEN SYNC

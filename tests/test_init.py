@@ -2,6 +2,8 @@
 
 import json
 import logging
+
+import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -367,3 +369,145 @@ def test_restart_ws_now_ignored_after_shutdown():
 
     mock_ws.assert_not_called()
     assert coord.wsc is None
+
+
+# --------------------------------------------------------------------------
+# What the server said on a failure.
+#
+# Before 0.1.19 a non-200 threw away the body entirely: the POST path raised a
+# bare "Security error" on 400 and never called res.json()/res.text. PR #20
+# reported `POST response: <Response [400]>` and nothing else, because nothing
+# else existed to report. These tests exist so that never regresses.
+#
+# They also guard the token: the old message interpolated self.token, and these
+# logs get pasted into public GitHub issues.
+# --------------------------------------------------------------------------
+
+TOKEN = "eyJhbGciOiJIUzI1NiJ9.SECRET-TOKEN-MUST-NOT-LEAK"
+PIN = "9137"
+
+
+def _coord_with_token() -> SmarthomesecCoordinator:
+    coord = object.__new__(SmarthomesecCoordinator)
+    coord.token = TOKEN
+    coord.userid = "207643"
+    return coord
+
+
+def _response(status: int, *, json_body=None, text: str = ""):
+    res = MagicMock()
+    res.status_code = status
+    res.text = text
+    if json_body is None:
+        res.json.side_effect = ValueError("no json")
+    else:
+        res.json.return_value = json_body
+    return res
+
+
+def _failing_post(status: int, **body):
+    """Drive _rest_call_post against a failing response; return the error text."""
+    coord = _coord_with_token()
+    payload = {"area": 1, "pincode": PIN, "mode": "arm", "format": 1}
+    with patch(
+        "custom_components.smarthomesec.requests.post",
+        return_value=_response(status, **body),
+    ):
+        with pytest.raises(Exception) as excinfo:
+            coord._rest_call_post("panel/mode", payload)
+    return str(excinfo.value)
+
+
+def test_a_400_reports_what_the_server_said():
+    """The whole point: a 400 must carry the server's own words."""
+    message = _failing_post(
+        400, json_body={"code": "021", "message": "Parameter error!", "result": False}
+    )
+
+    assert "400" in message
+    assert "panel/mode" in message
+    assert "021" in message
+    assert "Parameter error!" in message
+
+
+def test_a_400_with_a_non_json_body_still_reports_it():
+    message = _failing_post(400, text="<html><body>Bad Request</body></html>")
+
+    assert "non-JSON body" in message
+    assert "Bad Request" in message
+
+
+def test_a_400_with_an_empty_body_says_so():
+    """"empty body" is information too -- it rules out a server-side reason."""
+    message = _failing_post(400, text="")
+
+    assert "empty body" in message
+
+
+def test_an_unrecognised_json_body_lists_its_keys():
+    message = _failing_post(400, json_body={"surprise": 1, "another": 2})
+
+    assert "another, surprise" in message
+
+
+def test_the_error_never_leaks_the_token():
+    """The pre-0.1.19 message was f"Status: {code} / {self.token} / {self.userid}"."""
+    message = _failing_post(400, json_body={"code": "021", "message": "Parameter error!"})
+
+    assert TOKEN not in message
+    assert "SECRET-TOKEN-MUST-NOT-LEAK" not in message
+
+
+def test_the_error_never_leaks_the_pin():
+    message = _failing_post(400, json_body={"code": "021", "message": "Parameter error!"})
+
+    assert PIN not in message
+
+
+def test_the_failure_is_logged_with_the_field_names_but_not_the_values(caplog):
+    """Field NAMES are the diagnostic the pincode/pin question needs (PR #20)."""
+    with caplog.at_level(logging.ERROR, logger="custom_components.smarthomesec"):
+        _failing_post(400, json_body={"code": "021", "message": "Parameter error!"})
+
+    assert "area, format, mode, pincode" in caplog.text
+    assert PIN not in caplog.text
+    assert TOKEN not in caplog.text
+
+
+def test_a_500_is_reported_the_same_way():
+    """400 no longer has a special branch -- it was only ever "not 200"."""
+    message = _failing_post(500, json_body={"code": "999", "message": "Boom"})
+
+    assert "500" in message
+    assert "Boom" in message
+
+
+def test_a_failing_get_reports_the_body_and_hides_the_token():
+    coord = _coord_with_token()
+    with patch(
+        "custom_components.smarthomesec.requests.get",
+        return_value=_response(403, json_body={"code": "007", "message": "Forbidden!"}),
+    ):
+        with pytest.raises(Exception) as excinfo:
+            coord._rest_call_get("panel/cycle")
+
+    message = str(excinfo.value)
+    assert "403" in message
+    assert "panel/cycle" in message
+    assert "Forbidden!" in message
+    assert TOKEN not in message
+
+
+@pytest.mark.parametrize(
+    "res, expected",
+    [
+        (None, "no response"),
+        (_response(400, text=""), "empty body"),
+        (_response(400, text="nope"), "non-JSON body: nope"),
+        (_response(400, json_body={"code": "010"}), "code='010'"),
+        (_response(400, json_body=["a", "b"]), "JSON body: ['a', 'b']"),
+    ],
+)
+def test_server_said_shapes(res, expected):
+    assert SmarthomesecCoordinator._server_said(res) == expected
+
