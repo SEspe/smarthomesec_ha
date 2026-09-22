@@ -44,11 +44,28 @@ Useful flags:
 
     --host HOST          default portal.vestasecurity.eu
     --area N             default 1
-    --mode home|arm      which arm mode to test (default home)
+    --mode home|arm      which arm mode to test (default: home)
     --skip-wrong-pin     leave out step E
     --yes                skip the confirmation prompt
     --out result.txt     write the report (contains no PIN and no token)
 
+
+WHY HOME AND NOT AWAY
+---------------------
+`home` is the default on purpose, and there is no reason to change it. It arms
+the perimeter without live interior zones or an exit delay, so walking past a
+PIR while the probe runs cannot set anything off.
+
+It costs nothing in evidence either. The PIN is validated by panel/mode the
+same way whichever mode you ask for, and the two measurements this whole probe
+is built on were both home-mode:
+
+    18:44:37  pincode=<correct>  mode=home  ->  200/000  ->  armed, CID 3456
+    18:58:43  pincode=<wrong>    mode=home  ->  400      ->  nothing
+
+So the probe tests exactly the configuration we already have a baseline for.
+`--mode arm` exists, but it adds an exit delay and live interior zones for no
+extra information.
 
 WHAT IT SENDS
 -------------

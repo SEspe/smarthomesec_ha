@@ -73,7 +73,8 @@ import urllib.request
 DEFAULT_HOST = "portal.vestasecurity.eu"
 BASEPATH = "REST/v2"
 WRONG_PIN = "1111"
-SETTLE = 3.0          # seconds to let the panel report its new mode
+POLL_EVERY = 1.0      # seconds between panel/cycle reads while waiting
+POLL_TIMEOUT = 20.0   # give up waiting for a mode change after this
 
 
 def _open(req, timeout=20):
@@ -167,13 +168,41 @@ def read_mode(host, token, userid, area):
     return None
 
 
+def wait_for_mode(host, token, userid, area, want, timeout=POLL_TIMEOUT):
+    """Poll panel/cycle until the mode reaches `want`. Returns (mode, seconds).
+
+    A single sleep-then-read was not good enough, and the failure was in the
+    dangerous direction. If the panel were slower than the sleep, the probe
+    would read the OLD mode and record "not armed" - and on step D that false
+    negative reads as "the PIN check held" when the check had in fact been
+    bypassed. Polling makes a negative mean what it should: it really did not
+    arm within POLL_TIMEOUT seconds.
+
+    For reference, the panel measured on 2026-09-22 reported mode=home about
+    1.5s after the POST, so the timeout is generous on purpose.
+    """
+    started = time.time()
+    while True:
+        seen = read_mode(host, token, userid, area)
+        waited = time.time() - started
+        if seen == want or waited >= timeout:
+            return seen, waited
+        time.sleep(POLL_EVERY)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--user", required=True, help="account e-mail")
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--area", default="1")
     ap.add_argument("--mode", default="home", choices=["home", "arm"],
-                    help="which arm mode to test (default: home)")
+                    help="which arm mode to test. Default and recommended is "
+                         "home: it arms the perimeter without live interior "
+                         "zones or an exit delay, so walking past a PIR while "
+                         "the probe runs cannot set anything off. The PIN is "
+                         "validated the same way either way, and the two "
+                         "measurements this probe is built on were both home, "
+                         "so `arm` buys no extra information.")
     ap.add_argument("--dry-run", action="store_true", help="print payloads, send nothing")
     ap.add_argument("--skip-wrong-pin", action="store_true", help="leave out step E")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
@@ -242,16 +271,18 @@ def main():
             status, text = _post(args.host, "panel/mode", token, userid, fields)
             print("      HTTP %s - %s" % (status, _said(text)))
 
-            time.sleep(SETTLE)
-            now = read_mode(args.host, token, userid, args.area)
+            now, waited = wait_for_mode(args.host, token, userid, args.area, args.mode)
             armed = now == args.mode
-            print("      panel is now: %s  =>  %s" % (now, "ARMED" if armed else "not armed"))
+            print("      panel is now: %s after %.1fs  =>  %s"
+                  % (now, waited, "ARMED" if armed else "not armed"))
             rows.append((tag, label, str(status), now or "?", _said(text)))
 
             if armed:
                 st, tx = _post(args.host, "panel/mode", token, userid, disarm)
-                print("      disarming... HTTP %s - %s" % (st, _said(tx)))
-                time.sleep(SETTLE)
+                back, _w = wait_for_mode(args.host, token, userid, args.area, "disarm")
+                print("      disarming... HTTP %s - %s  (panel: %s)" % (st, _said(tx), back))
+                if back != "disarm":
+                    print("      *** DISARM DID NOT TAKE - CHECK YOUR PANEL ***")
             print()
     finally:
         if not args.dry_run:
@@ -260,10 +291,12 @@ def main():
                 print("Restoring area %s to %s..." % (args.area, started_as))
                 restore = dict(base, mode=started_as, pincode=pin)
                 st, tx = _post(args.host, "panel/mode", token, userid, restore)
-                print("  HTTP %s - %s" % (st, _said(tx)))
-                time.sleep(SETTLE)
-            print("\nFinal state of area %s: %s"
-                  % (args.area, read_mode(args.host, token, userid, args.area)))
+                back, _w = wait_for_mode(args.host, token, userid, args.area, started_as)
+                print("  HTTP %s - %s  (panel: %s)" % (st, _said(tx), back))
+            final = read_mode(args.host, token, userid, args.area)
+            print("\nFinal state of area %s: %s" % (args.area, final))
+            if started_as and final != started_as:
+                print("*** NOT back to %s - CHECK YOUR PANEL ***" % started_as)
 
     lines = ["", "RESULTS", "=======", "",
              "%-3s %-30s %-5s %-8s %s" % ("", "case", "HTTP", "panel", "server said")]
