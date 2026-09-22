@@ -111,10 +111,9 @@ The binary sensors work independently of the panel state, which is useful while 
 The entity requires a numeric code, so the standard card gives you a keypad. The digits are sent
 to the panel as the user PIN, in the `pincode` field of a `panel/mode` POST.
 
-⚠️ **A PIN that starts with `0` is not sent correctly.** The code converts it to an integer before
-sending, which drops the leading zero — `0123` goes out as `123`. If your PIN begins with a zero and
-arming from Home Assistant fails while the app works, this is why. Tracked as a known issue; a PIN
-without a leading zero is unaffected.
+A PIN that starts with `0` used to be sent wrong — the code parsed it as an integer, so `0123`
+went out as `123` and the panel refused it. **Fixed in 0.1.18.** If arming from Home Assistant
+fails while the app works and you are on an older version, upgrade first.
 
 ```yaml
 type: alarm-panel
@@ -133,6 +132,13 @@ From a script or automation:
 A PIN written into a script is stored in plaintext in your configuration — prefer the card, or a
 secret, if that matters to you.
 
+**What actually protects the panel is your provider account password.** The cloud API
+authenticates on that alone, and the PIN is an extra the server checks only when a request
+carries one (see `VESTA_API.md`); Yale's client for the same backend never sends one at all. So
+treat the account password as the thing standing between the internet and your alarm: make it
+strong and unique, and bear in mind Home Assistant stores it in the config entry, which makes your
+HA instance part of that boundary too.
+
 ## Limitations worth knowing
 
 - **A Home Assistant restart during a sounding alarm shows no `triggered`.** The alarm record
@@ -141,9 +147,10 @@ secret, if that matters to you.
 - **`triggered` is detected, not authoritative.** The panel never reports "triggered" over its
   API; the state is derived from a new alarm record (see `docs/VESTA_API.md`). It clears on any
   disarm, even one that did not follow an alarm.
-- **A leading zero in your PIN is dropped** before the request is sent (see above). Whether that
-  actually blocks arming depends on whether your provider's server validates the PIN at all, which
-  is not established — a panel that ignores the field will arm regardless.
+- **The PIN is not an independent second factor.** The API authenticates on your account
+  password; the PIN is validated when a request includes one, and a request without it is accepted.
+  This integration always sends it, so a wrong code is refused — but the account password is the
+  real boundary. See above.
 - **This is cloud-dependent** — your internet, the provider's backend, and a live WebSocket. Fine
   for notifications, lights and automations. **Not** a substitute for your alarm company's
   monitoring, and not life-safety equipment.
