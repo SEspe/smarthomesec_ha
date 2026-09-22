@@ -262,6 +262,36 @@ and do not rename it.
 significant — the panel's own Contact ID user field is zero-padded — so it should be sent
 verbatim rather than parsed as an integer.)*
 
+**A wrong PIN is rejected with HTTP 400 — measured 2026-09-22.** This is the one place the API
+breaks its own pattern, and it is worth stating plainly because it inverts the obvious reading of a
+400:
+
+```
+18:44:37  pincode=<correct>   -> HTTP 200  {"result": true, "code": "000", "message": "OK!"}
+                                 -> WS MODE_CHANGE, REST mode=home, CID 3456 (Partial Arm)
+18:58:43  pincode=<wrong>     -> HTTP 400
+                                 -> no MODE_CHANGE, no CID record, mode unchanged
+```
+
+Everywhere else this backend reports a *logical* failure as **HTTP 200 with a `code` other than
+`"000"`** — `010` login failure, `018`/`044` rate-limit lockout. `panel/mode` does not: a PIN it
+does not accept comes back as a bare **400**. So on this endpoint, **a 400 is evidence about the
+PIN, not about the request's shape**, and it cannot be read as "the server did not understand the
+parameters".
+
+Two consequences:
+
+- **The server really does validate the PIN.** It is not a decorative field, and anything that
+  causes the PIN to be sent wrong — such as parsing it as an integer and losing a leading zero,
+  which this integration did until 0.1.18 — produces exactly this 400.
+- **If a request that omits `pincode` entirely is accepted, that is the check being bypassed**, not
+  a different spelling being correct. Unverified, and it matters: see
+  [PR #20](https://github.com/SEspe/smarthomesec_ha/pull/20).
+
+**CID 3456 = Partial Arm** (qualifier 3 = close), emitted by `mode=home`. `3401` is a full arm and
+`1401` the matching disarm/open. For these 4xx open/close codes the last three digits are the
+**user**, not the zone.
+
 ## 4. Alarm detection
 
 **This is the part with no obvious answer, and two traps.**
