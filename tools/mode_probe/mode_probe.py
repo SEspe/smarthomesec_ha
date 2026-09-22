@@ -35,12 +35,20 @@ actually arms, and restoring the mode it found at the start:
     D  (no PIN field whatsoever)      does it arm with NO pin?  <- the key test
     E  pin=<wrong>                    if this ARMS, `pin` is ignored entirely
 
+Then phase 2, which is where the security weight actually sits, because
+arming without a code is normal on many panels but disarming without one is
+not. Each starts by arming with the correct PIN:
+
+    F  DISARM with no PIN field       can the alarm be switched OFF with no code?
+    G  DISARM with a wrong pincode    same, with a wrong code rather than none
+
 Your PIN is read interactively (getpass), sent ONLY to the alarm host over
 HTTPS, and is never printed or written to --out.
 
     py mode_probe.py --user YOUR_ACCOUNT
     py mode_probe.py --user YOUR_ACCOUNT --dry-run       # show payloads, send nothing
     py mode_probe.py --user YOUR_ACCOUNT --skip-wrong-pin
+    py mode_probe.py --user YOUR_ACCOUNT --skip-disarm-test
     py mode_probe.py --user YOUR_ACCOUNT --out result.txt
 
 READ BEFORE RUNNING - THIS ARMS YOUR ALARM FOR REAL
@@ -100,20 +108,50 @@ def _auth_headers(token, userid):
     }
 
 
-def _post(host, path, token, userid, fields):
+# Credentials for re-login, filled in by main(). The token has a ~5 minute
+# server-side TTL and this probe runs longer than that, so any call can meet a
+# 401 halfway through - including the restore in the finally block, which is
+# the one that puts the alarm back the way it was found. Failing that silently
+# leaves a panel armed, so every call re-authenticates once and retries.
+SESSION = {}
+
+
+def _relogin():
+    if not SESSION:
+        return False
+    SESSION["token"], SESSION["userid"] = login(
+        SESSION["host"], SESSION["user"], SESSION["password"]
+    )
+    print("      (token had expired - logged in again)")
+    return True
+
+
+def _post(host, path, token, userid, fields, _retry=True):
     """Form-encoded POST, framed exactly like the integration's _rest_call_post."""
+    token = SESSION.get("token", token)
+    userid = SESSION.get("userid", userid)
     url = "https://%s/%s/%s?_=%d" % (host, BASEPATH, path, round(time.time() * 1000))
     headers = _auth_headers(token, userid)
     headers["content-type"] = "application/x-www-form-urlencoded; charset=UTF-8"
     req = urllib.request.Request(
         url, data=urllib.parse.urlencode(fields).encode(), headers=headers, method="POST"
     )
-    return _open(req)
+    status, text = _open(req)
+    if status == 401 and _retry and _relogin():
+        return _post(host, path, None, None, fields, _retry=False)
+    return status, text
 
 
-def _get(host, path, token, userid):
+def _get(host, path, token, userid, _retry=True):
+    token = SESSION.get("token", token)
+    userid = SESSION.get("userid", userid)
     url = "https://%s/%s/%s?_=%d" % (host, BASEPATH, path, round(time.time() * 1000))
-    return _open(urllib.request.Request(url, headers=_auth_headers(token, userid)))
+    status, text = _open(
+        urllib.request.Request(url, headers=_auth_headers(token, userid))
+    )
+    if status == 401 and _retry and _relogin():
+        return _get(host, path, None, None, _retry=False)
+    return status, text
 
 
 def _body(text):
@@ -160,10 +198,27 @@ def login(host, user, password):
 
 
 def read_mode(host, token, userid, area):
-    _status, text = _get(host, "panel/cycle", token, userid)
-    body = _body(text) or {}
-    for entry in body.get("data", {}).get("model", []):
-        if str(entry.get("area")) == str(area):
+    """Current mode for `area`, or None if the panel did not say.
+
+    Defensive about the reply's shape on purpose. The first live run crashed
+    here with "'str' object has no attribute 'get'" - panel/cycle answered
+    with a bare JSON string rather than the usual object, most likely because
+    the ~5 minute token had expired mid-run. It crashed in the finally block,
+    so it took the disarm confirmation and the restore down with it and left
+    the panel armed. A state read that can strand an alarm in the armed state
+    must not assume anything about what comes back.
+    """
+    status, text = _get(host, "panel/cycle", token, userid)
+    body = _body(text)
+    if not isinstance(body, dict):
+        print("      (could not read mode: HTTP %s - %s)" % (status, _said(text)))
+        return None
+    data = body.get("data")
+    if not isinstance(data, dict):
+        print("      (could not read mode: HTTP %s - %s)" % (status, _said(text)))
+        return None
+    for entry in data.get("model") or []:
+        if isinstance(entry, dict) and str(entry.get("area")) == str(area):
             return entry.get("mode")
     return None
 
@@ -205,6 +260,9 @@ def main():
                          "so `arm` buys no extra information.")
     ap.add_argument("--dry-run", action="store_true", help="print payloads, send nothing")
     ap.add_argument("--skip-wrong-pin", action="store_true", help="leave out step E")
+    ap.add_argument("--skip-disarm-test", action="store_true",
+                    help="leave out phase 2 (F/G), which tests whether the "
+                         "panel can be DISARMED without a valid PIN")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     ap.add_argument("--out", help="write the report here (never contains the PIN)")
     args = ap.parse_args()
@@ -233,6 +291,8 @@ def main():
         pin = getpass.getpass("Alarm PIN (the one that works): ")
 
         token, userid = login(args.host, args.user, password)
+        SESSION.update(host=args.host, user=args.user, password=password,
+                       token=token, userid=userid)
         print("\nLogged in to %s (user_id %s)\n" % (args.host, userid))
 
         started_as = read_mode(args.host, token, userid, args.area)
@@ -249,6 +309,27 @@ def main():
     ]
     if not args.skip_wrong_pin:
         cases.append(("E", "pin=<WRONG>", dict(base, pin=WRONG_PIN)))
+
+    # Phase 2, and the one that actually carries security weight.
+    #
+    # Arming without a code is normal and deliberate on many alarm panels -
+    # you need a code to turn the system OFF, not on. So steps A-E arming with
+    # no PIN is suggestive but not damning on its own. Disarming without one
+    # is a different matter entirely: if F succeeds, anyone who can reach the
+    # API can switch the alarm off without knowing the code.
+    #
+    # Each of these has to start from an armed panel, so the runner arms with
+    # the correct pincode first and cleans up with a known-good disarm after.
+    disarm_cases = []
+    if not args.skip_disarm_test:
+        disarm_cases = [
+            ("F", "DISARM with NO pin field", dict(base, mode="disarm")),
+        ]
+        if not args.skip_wrong_pin:
+            disarm_cases.append(
+                ("G", "DISARM with pincode=<WRONG>",
+                 dict(base, mode="disarm", pincode=WRONG_PIN))
+            )
 
     rows = []
     try:
@@ -284,6 +365,45 @@ def main():
                 if back != "disarm":
                     print("      *** DISARM DID NOT TAKE - CHECK YOUR PANEL ***")
             print()
+
+        for tag, label, fields in disarm_cases:
+            print("[%s] %s" % (tag, label))
+            print("      fields sent: %s" % ", ".join(sorted(fields)))
+
+            if args.dry_run:
+                shown = dict(
+                    (k, "<your-pin>" if v == pin else v) for k, v in fields.items()
+                )
+                print("      DRY RUN, would POST: %s\n" % shown)
+                rows.append((tag, label, "-", "-", "dry run"))
+                continue
+
+            # Arm first, with the PIN we know works, so the test starts from
+            # a genuinely armed panel rather than from whatever came before.
+            _post(args.host, "panel/mode", token, userid, dict(base, pincode=pin))
+            ready, _w = wait_for_mode(args.host, token, userid, args.area, args.mode)
+            if ready != args.mode:
+                print("      could not arm to set the test up (panel: %s) - skipping\n" % ready)
+                rows.append((tag, label, "-", ready or "?", "setup failed"))
+                continue
+
+            status, text = _post(args.host, "panel/mode", token, userid, fields)
+            print("      HTTP %s - %s" % (status, _said(text)))
+
+            now, waited = wait_for_mode(args.host, token, userid, args.area, "disarm")
+            disarmed = now == "disarm"
+            print("      panel is now: %s after %.1fs  =>  %s"
+                  % (now, waited, "DISARMED - the PIN was not required"
+                     if disarmed else "still armed, PIN required"))
+            rows.append((tag, label, str(status), now or "?", _said(text)))
+
+            if not disarmed:
+                st, tx = _post(args.host, "panel/mode", token, userid, disarm)
+                back, _w = wait_for_mode(args.host, token, userid, args.area, "disarm")
+                print("      cleaning up... HTTP %s - %s  (panel: %s)" % (st, _said(tx), back))
+                if back != "disarm":
+                    print("      *** DISARM DID NOT TAKE - CHECK YOUR PANEL ***")
+            print()
     finally:
         if not args.dry_run:
             back = read_mode(args.host, token, userid, args.area)
@@ -313,6 +433,12 @@ def main():
         "  B armed, D and E rejected -> the server really does read `pin` too.",
         "  C armed  -> sending BOTH keys is safe here, and is the compatible fix.",
         "  A is the control. If A fails, something else is wrong - stop and re-read.",
+        "",
+        "  F disarmed -> THE PANEL CAN BE SWITCHED OFF WITHOUT THE CODE. Arming",
+        "              without a code is normal; disarming without one is not.",
+        "  G disarmed -> same, with a wrong code rather than none at all.",
+        "  F and G both refused -> the PIN guards what it needs to guard, and",
+        "              A-E only show that arming is deliberately code-free.",
         "",
     ]
     report = "\n".join(lines)

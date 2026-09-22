@@ -38,12 +38,14 @@ or double-click run.cmd, which prompts for the account and does the same.
 
 NOTE THE .\ IF YOU TYPE IT IN A CMD WINDOW:
 
-    .un.cmd YOUR_ACCOUNT --out result.txt
+    .
+un.cmd YOUR_ACCOUNT --out result.txt
 
 Windows can be configured with NoDefaultCurrentDirectoryInExePath=1, which
 stops cmd searching the current directory for a program. On such a machine a
 bare `run.cmd` gives "'run.cmd' is not recognized as an internal or external
-command" even while you are standing in this folder. `.un.cmd` always works,
+command" even while you are standing in this folder. `.
+un.cmd` always works,
 and so does calling the script directly with `py`.
 
 See the payload matrix without touching the network or your alarm:
@@ -56,6 +58,7 @@ Useful flags:
     --area N             default 1
     --mode home|arm      which arm mode to test (default: home)
     --skip-wrong-pin     leave out step E
+    --skip-disarm-test   leave out phase 2 (F and G)
     --yes                skip the confirmation prompt
     --out result.txt     write the report (contains no PIN and no token)
 
@@ -88,6 +91,13 @@ and restoring the mode it found at the start:
     D  (no PIN field whatsoever)      does it arm with NO pin?  <- the key test
     E  pin=<wrong>                    if this ARMS, `pin` is ignored entirely
 
+Then phase 2. Arming without a code is normal and deliberate on many panels -
+you need the code to turn the system OFF, not on - so A-E alone do not prove
+anything is wrong. These do. Each arms with the correct PIN first:
+
+    F  DISARM with no PIN field       can the alarm be switched OFF with no code?
+    G  DISARM with a wrong pincode    same, with a wrong code rather than none
+
 Reading the result:
 
     D armed   -> the panel arms with no PIN, so `pin` is equivalent to omitting
@@ -97,6 +107,11 @@ Reading the result:
                  the disagreement is a genuine per-panel difference.
     C armed   -> sending both keys is safe, and is the compatible fix.
     A is the control. If A fails, something else is wrong - stop and re-read.
+
+    F disarmed -> THE PANEL CAN BE SWITCHED OFF WITHOUT THE CODE.
+    G disarmed -> the same, with a wrong code rather than none at all.
+    F and G refused -> the PIN guards what it needs to guard, and A-E only
+                 show that arming is deliberately code-free.
 
 
 BEFORE YOU RUN IT - THIS IS A REAL ALARM
