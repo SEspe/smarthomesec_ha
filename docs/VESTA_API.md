@@ -139,8 +139,37 @@ relative to `/REST/v2/`; Yale's client uses `/yapi/api/...` for the same handler
 | `panel/status` | GET | panel health: `acfail`, `battery`, `tamper`, `jam`, `rssi`, `gsm_rssi` |
 | `panel/online` | GET | `"online"` / offline |
 | `panel/info` | GET | firmware versions, MAC, dealer contact details |
-| `event/report?page_num=1&set_utc=1` | GET | **paged event log** — unprobed here, present in the Yale client |
+| `event/report?page_num=1&set_utc=1` | GET | **latest alarm notification** — not a paged log on Vesta (see below) |
 | `panel/panic` | POST | trigger a panic alarm — **real, dispatches a guard** |
+
+### `event/report` — measured 2026-10-12
+
+Yale's client reads this as a paged event log. On Vesta it answers (HTTP 200, `code 000`) but
+**ignores `page_num`** — every page is identical — and returns **one event: the latest alarm**,
+marked `"read": false`. It behaves like the app's alarm notification, not a history.
+Measured with `tools/event_probe`.
+
+```jsonc
+{"result": true, "code": "000", "message": "OK!", "panelCode": "", "data": [
+  {"id": "413789138",                 // == alarm_event_latest.report_id (not "report_id" here)
+   "event_type": "1130", "cid_source": "DEVICE", "is_alarm": true, "read": false,
+   "area": "1", "zone": "5", "user": "",
+   "name": "IR Stue", "type": "device_type.pir",
+   "time": "08/10/2026 13:17:39",     // PANEL clock, local, DD/MM/YYYY — see below
+   "event_time": "08/10/2026 13:17:39",
+   "cid_trans": "Innbrudd", "user_trans": "IR Stue (Sone 5)", "area_trans": "Område 1",
+   "cid_icon": "cid1130", "capture_id": "", "capture_id_list": [], "media_type": "", "...": ""}
+]}
+```
+
+- **`time` here is the panel's clock, not the server's**, as a local-time string even with
+  `set_utc=1`. Proven by order: HA showed this alarm's arming at 13:19:44 and `triggered` at
+  13:20:54, yet `time` reads 13:17:39, before the arming. The gap matches the panel's drift
+  (below). Use it for ordering, never for "when".
+- **Text is not UTF-8** — `area_trans` arrives as Windows-1252 (`å` as a single byte). Decode
+  accordingly.
+- The server resolves the device `name` and a translated reason itself, which `panel/cycle` does
+  not.
 
 ### `panel/cycle` — the response shape
 
@@ -165,13 +194,14 @@ slow.** Both are epoch seconds. On this installation `time - utc_event_time` was
 2026 and 161–163 s in September, i.e. **drifting ~0.6 s/day**. `time` matches the moment the
 WebSocket pushes the event, to the second; `utc_event_time` is that much in the past. It is not a
 reporting delay — the same offset appears on `1400`/`3401` open/close records, which have no entry
-delay and no burglar-report delay. Three samples from this installation, monotonic:
+delay and no burglar-report delay. Samples from this installation, monotonic:
 
 | Record date | `time − utc_event_time` |
 |---|---|
 | 2026-08-04 | 140 s |
 | 2026-08-16 | 150 s |
 | 2026-09-06 | 161–163 s |
+| 2026-10-08 | ~185 s — *inferred*, from `event/report`'s panel-clock time against HA's `triggered` timestamp minus the ~10 s detection delay |
 
 **If you compute event freshness, use `time`**, or you silently lose that many seconds from your
 window, and progressively more as the panel drifts. Guard it: only Vesta has been measured, so a
