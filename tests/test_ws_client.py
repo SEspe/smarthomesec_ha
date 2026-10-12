@@ -175,6 +175,11 @@ def test_stop_heartbeat_halts_pings():
     ws._start_heartbeat(sock, interval=0.02)
     time.sleep(0.08)
     ws._stop_heartbeat()
+    # A tick that had already woken from its wait when stop was set may still
+    # send one last PING. Let it land before counting; what must hold is that
+    # nothing follows it. (Counting straight after stop failed 1 run in ~10
+    # on 2026-10-12 — a race in the test, not in the beater.)
+    time.sleep(0.05)
     settled = sock.send.call_count
     time.sleep(0.1)
 

@@ -13,7 +13,6 @@ from functools import partial
 from datetime import timedelta
 
 import voluptuous as vol
-import async_timeout
 
 from custom_components.smarthomesec.ws_client import WSClient
 from custom_components.smarthomesec import redact
@@ -326,7 +325,11 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         try:
             ret: dict = {"devices": {}, "alarms": {}}
 
-            async with async_timeout.timeout(20):
+            # asyncio.timeout, ikke pakken async_timeout: HA 2026.10 kjører på
+            # Python 3.14, der aiohttp ikke lenger drar den inn, så importen
+            # feilet og hele integrasjonen lot seg ikke laste. stdlib siden 3.11;
+            # laveste HA vi støtter krever 3.12.
+            async with asyncio.timeout(20):
                 status = await self.hass.async_add_executor_job(self.update_status)
 
                 # Alarmhendelsen leses FØR modus-loopen, slik at en disarm i
