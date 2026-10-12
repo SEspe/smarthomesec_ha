@@ -41,6 +41,10 @@ READ-ONLY. One login, then GETs. It never arms, disarms or changes anything.
     py event_probe.py --user YOUR_ACCOUNT --pages 10
     py event_probe.py --user YOUR_ACCOUNT --out result.txt --raw raw.out
 
+MEASURED 2026-10-12 (Vesta): the endpoint exists but ignores page_num and
+returns only the latest alarm, `id` not report_id, with `time` on the PANEL's
+clock as local "DD/MM/YYYY HH:MM:SS". See README.txt, "What it found".
+
 READ BEFORE RUNNING
 -------------------
   * It logs in ONCE. Login is rate-limited per source IP (~3 failures -> 5
@@ -95,14 +99,27 @@ CID_NAMES = {
 }
 
 
+def _decode(raw):
+    """UTF-8 if it is, else Windows-1252.
+
+    Measured 2026-10-12: event/report's area_trans arrived as "Område" - a
+    single Latin-1 byte for "a-ring" - which a lenient UTF-8 decode turned into
+    the replacement character. Strict UTF-8 first, then the 8-bit fallback.
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", "replace")
+
+
 def _open(req, timeout=20):
     """Send a request and return (status, body-text), body included on errors."""
     ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as res:
-            return res.status, res.read().decode("utf-8", "replace")
+            return res.status, _decode(res.read())
     except urllib.error.HTTPError as ex:
-        return ex.code, ex.read().decode("utf-8", "replace")
+        return ex.code, _decode(ex.read())
 
 
 def _auth_headers(token, userid):
@@ -238,11 +255,16 @@ def classify(code):
     return ""
 
 
+def event_id(event):
+    """Yale calls it report_id; Vesta's event/report calls it `id` (2026-10-12)."""
+    return str(event.get("report_id") or event.get("id") or "")
+
+
 def event_line(event):
     code = cid_code_of(event)
     kind = classify(code)
     name = CID_NAMES.get(code[1:], "") if code else ""
-    rid = str(event.get("report_id") or "")
+    rid = event_id(event)
     flag = "  <== " + KNOWN_ALARMS[rid] if rid in KNOWN_ALARMS else ""
     return "%-19s  %-9s %-4s %-8s %-18s area %-2s zone %-3s user %-3s %s%s" % (
         fmt_time(event.get("time")),
@@ -330,6 +352,13 @@ def main():
         if status != 200 or not page_events:
             say("page %d: HTTP %s - %s (stopping)" % (page, status, _said(text)))
             break
+        # Measured 2026-10-12: Vesta ignores page_num and returns the same
+        # page every time. Without this check the probe listed one event five
+        # times and called it five events.
+        if page_events == find_events(raw_pages[-1]):
+            say("page %d is identical to page %d - page_num is ignored (stopping)"
+                % (page, page - 1))
+            break
         raw_pages.append(body)
         events.extend(page_events)
 
@@ -340,14 +369,14 @@ def main():
         say("%d events from %d page(s), in the order the server sent them:" %
             (len(events), len(raw_pages)))
         say("")
-        say("%-19s  %-9s %-4s %-8s %-18s %s" % ("time (server)", "report_id", "cid",
-                                                 "class", "meaning", "where / device"))
+        say("%-19s  %-9s %-4s %-8s %-18s %s" % (
+            "time (PANEL clock)", "id", "cid", "class", "meaning", "where / device"))
         for event in events:
             say(event_line(event))
 
         # 3. What it answers.
         codes = [cid_code_of(e) for e in events]
-        seen = {str(e.get("report_id")) for e in events}
+        seen = {event_id(e) for e in events}
         say("")
         say("SUMMARY")
         say("  alarm-class (1 1xx):  %d" % sum(classify(c) == "ALARM" for c in codes))

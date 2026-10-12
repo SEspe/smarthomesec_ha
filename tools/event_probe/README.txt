@@ -79,8 +79,22 @@ WHAT IT DOES
   4. A summary: how many alarm-class, restore and cancel events, which of the
      three known burglaries are still in the log, and the last event read.
 
-Time is shown from the `time` field, which is the server's clock. The
-panel's own clock (utc_event_time) runs ~160 s slow; see docs/VESTA_API.md.
+Time is shown from the `time` field. On Vesta that is the PANEL's clock, in
+local time, formatted DD/MM/YYYY HH:MM:SS - even with set_utc=1. The panel's
+clock runs slow (~185 s by October 2026), so an alarm can appear to happen
+before the arming that preceded it. Use these times for ORDER, not for when.
+
+
+WHAT IT FOUND (2026-10-12, Vesta, first run)
+--------------------------------------------
+  * The endpoint exists: HTTP 200, code 000.
+  * It ignores page_num and returns one event: the latest alarm, with
+    "read": false. It looks like the app's alarm notification, not a history
+    log. Paging parameters that do work are still unknown.
+  * Fields differ from Yale: `id` instead of report_id, string times, plus
+    is_alarm, read, type, cid_trans ("Innbrudd"), user_trans ("IR Stue
+    (Sone 5)"), area_trans, cid_icon, cid_source.
+  * Text is not UTF-8: area_trans arrives as Latin-1/Windows-1252.
 
 
 READING THE RESULT
