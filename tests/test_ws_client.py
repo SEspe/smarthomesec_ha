@@ -1,7 +1,10 @@
 """Tests for Socket.IO frame parsing and the Engine.IO heartbeat in WSClient."""
 
+import logging
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from custom_components.smarthomesec.ws_client import (
     DEFAULT_PING_INTERVAL,
@@ -214,3 +217,202 @@ def test_stop_client_stops_heartbeat():
     time.sleep(0.08)
 
     assert sock.send.call_count == settled
+
+
+# ----------------------------------------------------------------------
+# The connection loop: run(), backoff and the silence watchdog.
+#
+# Untested until 2026-10-12. websocket.WebSocketApp is replaced by a fake
+# whose run_forever() plays a script, and time.sleep is captured, so the loop
+# runs in microseconds with no network.
+# ----------------------------------------------------------------------
+
+WS_MOD = "custom_components.smarthomesec.ws_client"
+
+
+class _ScriptedApp:
+    """Stands in for websocket.WebSocketApp; each run_forever() runs one step."""
+
+    def __init__(self, steps, client):
+        self.steps = steps
+        self.client = client
+        self.apps = []
+
+    def __call__(self, url, **handlers):
+        self.apps.append(url)
+        app = MagicMock()
+        app.run_forever.side_effect = lambda **kw: self.steps.pop(0)(self.client)
+        return app
+
+
+def _run(ws, steps):
+    """Run ws.run() against a scripted server, returning (apps, sleep mock)."""
+    scripted = _ScriptedApp(list(steps), ws)
+    with patch(f"{WS_MOD}.websocket.WebSocketApp", side_effect=scripted), patch(
+        f"{WS_MOD}.time.sleep"
+    ) as sleep:
+        ws.run()
+    return scripted.apps, sleep
+
+
+def _stop(ws):
+    ws.stop = True
+
+
+def _drop_quickly(ws):
+    """A connection that dies at once (never opened): `lived` stays ~0."""
+
+
+def _drop_after(seconds):
+    def step(ws):
+        ws._last_connect = time.time() - seconds
+    return step
+
+
+def _backoffs(caplog):
+    return [
+        int(r.args[0]) for r in caplog.records if r.msg.startswith("WebSocket reconnect in")
+    ]
+
+
+def test_run_connects_with_the_token_in_the_url():
+    coordinator, ws = _client()
+
+    apps, sleep = _run(ws, [_stop])
+
+    assert len(apps) == 1
+    assert "token=token123" in apps[0] and "EIO=4" in apps[0]
+    assert apps[0].startswith("wss://") and "/ws/socket.io/" in apps[0]
+    sleep.assert_not_called()
+
+
+def test_short_lived_connections_back_off_up_to_30s(caplog):
+    """A socket that dies at once doubles the delay: 4, 8, 16, 30, 30."""
+    caplog.set_level(logging.DEBUG, logger=WS_MOD)
+    coordinator, ws = _client()
+
+    apps, sleep = _run(ws, [_drop_quickly] * 5 + [_stop])
+
+    assert _backoffs(caplog) == [4, 8, 16, 30, 30]
+    assert len(apps) == 6
+    assert sleep.call_count == 4 + 8 + 16 + 30 + 30  # one-second steps
+
+
+def test_a_connection_that_lived_resets_the_backoff(caplog):
+    """After a healthy connection, the next reconnect is quick again."""
+    caplog.set_level(logging.DEBUG, logger=WS_MOD)
+    coordinator, ws = _client()
+
+    _run(ws, [_drop_quickly, _drop_quickly, _drop_after(60), _stop])
+
+    assert _backoffs(caplog) == [4, 8, 2]
+
+
+def test_stop_during_the_backoff_ends_the_loop_promptly():
+    """stop_client() must not wait out a 30 s backoff before the thread exits."""
+    coordinator, ws = _client()
+    sleeps = []
+
+    def sleep(_):
+        sleeps.append(1)
+        if len(sleeps) == 2:
+            ws.stop = True
+
+    scripted = _ScriptedApp([_drop_quickly], ws)
+    with patch(f"{WS_MOD}.websocket.WebSocketApp", side_effect=scripted), patch(
+        f"{WS_MOD}.time.sleep", side_effect=sleep
+    ):
+        ws.run()
+
+    assert len(sleeps) == 2  # not the full 4
+    assert len(scripted.apps) == 1  # and no reconnect after stopping
+
+
+def _silent_for_hours(ws):
+    """The line dropped after one connection that saw no event for 6h+."""
+    long_ago = time.time() - 21700
+    ws._last_connect = long_ago
+    ws._last_event = long_ago
+
+
+def test_watchdog_forces_a_login_after_six_silent_hours():
+    coordinator, ws = _client()
+
+    apps, sleep = _run(ws, [_silent_for_hours])
+
+    assert ("ForceLogin", None) in coordinator.calls
+    assert coordinator.senders[-1] is ws
+    assert len(apps) == 1  # it hands over to login(); no reconnect of its own
+    sleep.assert_not_called()
+
+
+def test_watchdog_ignores_a_fresh_connection():
+    """Silent for 6h but connected under 5 min ago: just reconnect normally."""
+    coordinator, ws = _client()
+
+    def silent_but_new(ws):
+        ws._last_event = time.time() - 21700
+        ws._last_connect = time.time() - 60
+
+    _run(ws, [silent_but_new, _stop])
+
+    assert ("ForceLogin", None) not in coordinator.calls
+
+
+# ----------------------------------------------------------------------
+# Handlers: open, error, stop
+# ----------------------------------------------------------------------
+
+
+def test_on_open_sends_socketio_connect_and_tells_the_coordinator():
+    coordinator, ws = _client()
+    sock = MagicMock()
+    ws._last_event = 0
+
+    ws._on_open(sock)
+
+    sock.send.assert_called_once_with("40")
+    assert coordinator.calls == [("WebSocketConnect", None)]
+    assert ws._last_event == ws._last_connect > 0  # watchdog clock restarted
+
+
+def test_on_open_still_reports_the_connect_if_the_send_fails(caplog):
+    coordinator, ws = _client()
+    sock = MagicMock()
+    sock.send.side_effect = OSError("closed")
+
+    ws._on_open(sock)
+
+    assert "Failed to send CONNECT" in caplog.text
+    assert coordinator.calls == [("WebSocketConnect", None)]
+
+
+def test_a_normal_close_is_not_an_error():
+    """opcode=8 is the server's ordinary close frame — not worth a warning."""
+    coordinator, ws = _client()
+
+    ws._on_error(None, Exception("Connection to remote host was lost. opcode=8"))
+
+    assert coordinator.calls == []
+
+
+def test_a_real_error_is_passed_on():
+    coordinator, ws = _client()
+    err = Exception("handshake failed")
+
+    ws._on_error(None, err)
+
+    assert coordinator.calls == [("WebSocketError", err)]
+
+
+@pytest.mark.parametrize("close_raises", [False, True])
+def test_stop_client_closes_the_socket_and_flags_the_loop(close_raises):
+    coordinator, ws = _client()
+    ws.wsc = MagicMock()
+    if close_raises:
+        ws.wsc.close.side_effect = OSError("already closed")
+
+    ws.stop_client()
+
+    assert ws.stop is True
+    ws.wsc.close.assert_called_once()
