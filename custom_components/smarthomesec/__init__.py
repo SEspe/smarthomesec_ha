@@ -16,6 +16,7 @@ import voluptuous as vol
 import async_timeout
 
 from custom_components.smarthomesec.ws_client import WSClient
+from custom_components.smarthomesec import redact
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
@@ -62,6 +63,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Ingen PIN, passord eller token i loggene – se redact.py.
+redact.install()
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -406,8 +410,6 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             self.token = json_dict["token"]
             self.userid = json_dict["data"]["user_id"]
 
-            _LOGGER.debug("Token: %s", self.token)
-
             if immediate_ws:
                 _LOGGER.debug("Token refreshed → swapping WS to the new token")
                 self.restart_ws_now()
@@ -520,7 +522,9 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         status_code = 0
         loop = 0
 
-        _LOGGER.debug("set_alarm_mode payload: %s", payload)
+        # Feltnavnene trengs for feilsøking (PR #20 dreide seg om nettopp
+        # dem); PIN-en gjør det ikke.
+        _LOGGER.debug("POST %s payload: %s", path, redact.redact(payload))
 
         if not self.token:
             self.login()
@@ -580,7 +584,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         # -----------------------------
         try:
             json_dict = res.json()
-            _LOGGER.debug("POST JSON: %s", json_dict)
+            _LOGGER.debug("POST JSON: %s", redact.redact(json_dict))
 
             # 🔥 TOKEN SYNC – oppdater WS-token hvis API returnerer nytt token
             new_token = json_dict.get("token")
@@ -905,8 +909,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
            HA-kall – code_arm_required styrer bare ARMERING – så en disarm uten
            kode ga et ubehandlet unntak i stedet for et svar fra panelet.
 
-        NB: om serveren i det hele tatt VALIDERER PIN-en er fortsatt uavklart
-        (se PR #20). Det endrer ikke at å sende "0123" som 123 er feil.
+        Serveren validerer `pincode` når feltet er med, og bare da – målt med
+        tools/mode_probe 2026-09-22 (feil PIN gir HTTP 400 / code 996).
         """
         payload = {
             "area": int(area),
@@ -1224,7 +1228,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                     self._set_pir_active(device_id)
 
 
-                _LOGGER.debug("DEVICE STATUS FULL: %s", self.status)
+                # GET-svaret ekkoer tokenet byte for byte – derfor redact.
+                _LOGGER.debug("DEVICE STATUS FULL: %s", redact.redact(self.status))
                 # Umiddelbar refresh
                 asyncio.run_coroutine_threadsafe(
                     self.async_request_refresh(),
