@@ -1164,8 +1164,16 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 )
                 return
 
+            # Aldri observert, men uten disse to linjene ga `"data": null` eller
+            # en payload som ikke er et objekt AttributeError her. websocket-
+            # client fanger den og logger ERROR, så linja overlever – men
+            # refreshen for eventet uteble. En dørklokke skal alltid ringe.
+            if not isinstance(inner, dict):
+                inner = {}
             event_type = inner.get("refreshed_type")
-            event_data = inner.get("data", {})
+            event_data = inner.get("data")
+            if not isinstance(event_data, dict):
+                event_data = {}
 
             _LOGGER.debug("WS EVENT: %s | %s", event_type, event_data)
 

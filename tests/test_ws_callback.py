@@ -132,6 +132,31 @@ def test_unparseable_frame_still_refreshes(coord, scheduled, caplog):
     assert "WS parse error" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "inner",
+    [
+        {"refreshed_type": "DEVICE_STATUS", "refreshed": True, "data": None},
+        {"refreshed_type": "REPORT", "refreshed": True, "data": None},
+        {"refreshed_type": "DEVICE_STATUS", "refreshed": True, "data": "not an object"},
+        "not an object at all",
+        ["a", "list"],
+    ],
+    ids=["device-status-null", "report-null", "data-string", "inner-string", "inner-list"],
+)
+def test_a_malformed_payload_still_refreshes(coord, scheduled, inner):
+    """Never seen in a log — but before the guard, these raised AttributeError.
+
+    websocket-client catches exceptions from on_message and logs ERROR, so the
+    socket survived; the refresh for that event did not. A doorbell that
+    cannot ring is the one failure the WS path must not have.
+    """
+    rct, _ = scheduled
+
+    coord.callback("42", json.dumps(["opaque-id", json.dumps(inner)]), sender=coord.wsc)
+
+    assert _refreshes(rct, coord) >= 1
+
+
 # ----------------------------------------------------------------------
 # DEVICE_STATUS: the PIR path, end to end
 # ----------------------------------------------------------------------
