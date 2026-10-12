@@ -11,6 +11,7 @@ import time
 import websocket
 
 from custom_components.smarthomesec.const import API_BASEHOST
+from custom_components.smarthomesec.redact import redact
 
 LOG = logging.getLogger(__name__)
 
@@ -199,7 +200,8 @@ class WSClient(threading.Thread):
             f"?token={self.token}&transport=websocket&EIO=4"
         )
 
-        LOG.debug("WebSocket URL: %r", wsc_url)
+        # URL-en bærer tokenet i klartekst – logg den uten.
+        LOG.debug("WebSocket URL: %r", redact(wsc_url))
 
         reconnect_delay = 2
         forced_login = False
