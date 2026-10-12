@@ -1,6 +1,7 @@
 """Tests for the binary_sensor is_on / device_class logic."""
 
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -76,11 +77,24 @@ def test_device_class(device_type, expected):
 
 
 def test_pir_turns_on_from_a_ws_event():
-    coord = _coordinator()
-    coord._set_pir_active = SmarthomesecCoordinator._set_pir_active.__get__(coord)
-    coord._pir_state["RF:pir1"] = time.monotonic() + PIR_MOTION_TTL
+    """Goes through _set_pir_active, which the WS DEVICE_STATUS handler calls.
 
-    assert _sensor({"type": "device_type.pir", "status_motion": ""}, coord).is_on is True
+    Until 2026-10-12 this test bound _set_pir_active and then never called
+    it — it wrote _pir_state by hand, so the method its name promised was 0 %
+    covered. The full WS frame → entity chain is in test_ws_callback.py.
+    """
+    coord = _coordinator()
+    coord.hass = MagicMock()
+    coord.async_request_refresh = MagicMock()
+    sensor = _sensor({"type": "device_type.pir", "status_motion": ""}, coord)
+    assert sensor.is_on is False
+
+    with patch("custom_components.smarthomesec.threading.Thread"), patch(
+        "custom_components.smarthomesec.asyncio.run_coroutine_threadsafe"
+    ):
+        coord._set_pir_active("RF:pir1")
+
+    assert sensor.is_on is True
 
 
 def test_pir_turns_off_when_the_window_expires(monkeypatch):

@@ -429,10 +429,12 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         kastet "Security error" uten å lese kroppen. Vi kunne ikke se om
         serveren klaget på feltnavnet, PIN-en, området eller noe helt fjerde.
 
-        MERK hva en 400 betyr her: dette API-et melder LOGISKE feil som HTTP
-        200 med en kode ulik "000" (010 login, 018/044 utestengt). En 400 når
-        aldri det kodespråket – den betyr at forespørselen ble avvist på
-        FORMEN, før noen PIN ble vurdert. De to må ikke forveksles.
+        MERK: en 400 er IKKE bare "feil form på forespørselen". Det trodde vi,
+        og det var feil – målt med tools/mode_probe 2026-09-22: feil PIN på
+        panel/mode gir HTTP 400 med `code 996 "PIN Code Error"`. Login-kodene
+        (010, 018/044) står også i kroppen, og hvilken status de følger med er
+        bevisst ikke målt (se config_flow.test_host_connection). Statuskoden alene sier altså ikke hva som gikk galt – kroppen gjør
+        det, og det er hele grunnen til at denne funksjonen finnes.
 
         `token` gjengis bevisst ALDRI. Feilmeldingen havner i brukerens logg,
         og brukeren limer loggen inn i et offentlig GitHub-issue.
