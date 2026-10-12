@@ -49,9 +49,6 @@ SERVER_PING_GRACE = 2.0
 class WSClient(threading.Thread):
     """WebSocket client for SmartHomeSec (Socket.IO EIO=4)."""
 
-    global_wsc = None
-    global_stop = False
-
     def __init__(self, client, token):
         LOG.debug("WSClient initializing...")
 
@@ -175,7 +172,6 @@ class WSClient(threading.Thread):
         LOG.debug("WSClient stopping...")
 
         self.stop = True
-        self.global_stop = True
         self._stop_heartbeat()
 
         if self.wsc is not None:
@@ -184,14 +180,18 @@ class WSClient(threading.Thread):
             except Exception:
                 pass
 
-        self.global_wsc = None
-
     # ----------------------------------------------------------------------
     # INTERNAL
     # ----------------------------------------------------------------------
 
     def run(self):
-        """WebSocket loop with adaptive reconnect (single owner)."""
+        """WebSocket loop with adaptive reconnect.
+
+        Én klient per tråd. Hvem som eier tråden – og dermed at det bare finnes
+        én – avgjør koordinatoren (self.wsc, stop_ws, restart_ws_now), ikke
+        denne klassen. Til 2026-10-12 lå det et "global_wsc"-vern her som aldri
+        virket: klasseattributtet ble skygget av self.-skrivinger.
+        """
 
         base = API_BASEHOST.rstrip("/")
         wsc_url = (
@@ -200,13 +200,6 @@ class WSClient(threading.Thread):
         )
 
         LOG.debug("WebSocket URL: %r", wsc_url)
-
-        # Close previous global WS if any
-        if self.global_wsc is not None:
-            try:
-                self.global_wsc.close()
-            except Exception:
-                pass
 
         reconnect_delay = 2
         forced_login = False
@@ -223,8 +216,6 @@ class WSClient(threading.Thread):
                 on_pong=self._on_pong,
                 on_open=self._on_open,
             )
-
-            self.global_wsc = self.wsc
 
             # ✅ Run connection (blocking)
             self.wsc.run_forever(
