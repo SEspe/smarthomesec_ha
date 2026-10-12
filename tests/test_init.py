@@ -217,6 +217,66 @@ def test_login_from_rest_401_swaps_the_ws_to_the_new_token():
     assert coord.token == "new-token"
 
 
+def _http(status: int, body=None):
+    res = MagicMock()
+    res.status_code = status
+    res.json.return_value = body if body is not None else {}
+    return res
+
+
+def test_get_401_relogs_in_and_swaps_the_ws_immediately():
+    """The caller side of the test above, which until 2026-10-12 nothing exercised.
+
+    That test calls login(immediate_ws=True) directly. Whether a real 401
+    actually *passes* immediate_ws=True was untested: reverting the branch to
+    a plain self.login() would bring back the ~21s blind window after every
+    re-login — which on Vesta is every ~5 minutes — with the suite still green.
+    """
+    coord = _login_coordinator()
+    ok = {"data": {"model": []}}
+
+    with patch(
+        "custom_components.smarthomesec.requests.get",
+        side_effect=[_http(401), _http(200, ok)],
+    ) as mock_get, patch.object(SmarthomesecCoordinator, "login") as mock_login:
+        result = coord._rest_call_get("panel/cycle")
+
+    mock_login.assert_called_once_with(immediate_ws=True)
+    assert mock_get.call_count == 2
+    assert result == ok
+
+
+def test_post_401_relogs_in_and_swaps_the_ws_immediately():
+    """Same for POST — every arm and disarm goes through here."""
+    coord = _login_coordinator()
+    ok = {"result": True, "code": "000"}
+
+    with patch(
+        "custom_components.smarthomesec.requests.post",
+        side_effect=[_http(401), _http(200, ok)],
+    ) as mock_post, patch.object(SmarthomesecCoordinator, "login") as mock_login:
+        result = coord._rest_call_post("panel/mode", {"area": 1, "mode": "arm"})
+
+    mock_login.assert_called_once_with(immediate_ws=True)
+    assert mock_post.call_count == 2
+    assert result == ok
+
+
+def test_get_gives_up_after_two_401s():
+    """Two re-logins and still 401 means the credentials are bad — no third try."""
+    coord = _login_coordinator()
+
+    with patch(
+        "custom_components.smarthomesec.requests.get",
+        side_effect=[_http(401), _http(401), _http(200)],
+    ) as mock_get, patch.object(SmarthomesecCoordinator, "login") as mock_login:
+        with pytest.raises(Exception, match="HTTP 401"):
+            coord._rest_call_get("panel/cycle")
+
+    assert mock_login.call_count == 2
+    assert mock_get.call_count == 2
+
+
 def test_login_defers_ws_start_by_default():
     """Setup and ForceLogin have no live WS to swap — bring one up via the timer."""
     coord = _login_coordinator()
