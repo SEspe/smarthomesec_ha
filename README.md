@@ -48,3 +48,7 @@ logger:
   logs:
     custom_components.smarthomesec: debug
 ```
+
+## Credits
+
+This integration started as [koying/smarthomesec_ha](https://github.com/koying/smarthomesec_ha) by Chris Browet (koying). This repository is a fork of that project, adapted for HACS and maintained separately from upstream. The commit history shows which changes are which. Thanks to the upstream author for the original work.
