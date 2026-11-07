@@ -24,13 +24,15 @@ dispatch a guard. Arrange test mode with them first.
 
 ## Security: the PIN is not a second factor
 
-- **A request without a PIN is accepted.** The server checks the PIN only when a request includes
-  one. Other clients for the same backend send no PIN at all, and the server accepts them.
-- **A wrong PIN is refused.** Arming or disarming with a wrong PIN returns an error, and on a
-  disarm the panel stays armed.
-- **Your account password is the real protection.** Anyone who has it can arm and disarm the alarm,
-  with or without a PIN. Use a strong, unique password, and remember that Home Assistant stores it
-  in the config entry.
+Measured on a VESTA panel in November 2026:
+
+- **Arming needs no PIN.** Arming worked with a correct, missing, empty or wrong PIN.
+- **Disarming without a PIN succeeds.** A disarm request with no PIN, or an empty one, switches the
+  alarm off. Anyone who has your account password can disarm without the code.
+- **A wrong PIN is refused on disarm.** A disarm with a wrong PIN returns an error, and the panel
+  stays armed.
+- **Your account password is the real protection.** Use a strong, unique password. Home Assistant
+  stores it in the config entry, so treat your HA instance as part of that boundary.
 
 For the details, see [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) and
 [`docs/VESTA_API.md`](docs/VESTA_API.md).
