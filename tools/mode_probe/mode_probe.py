@@ -306,6 +306,10 @@ def main():
         ("B", "pin=<correct>", dict(base, pin=pin)),
         ("C", "pin + pincode, both correct", dict(base, pin=pin, pincode=pin)),
         ("D", "NO pin field at all", dict(base)),
+        # H is what the integration actually sends when Home Assistant passes no
+        # code: the field is present but EMPTY. D (field absent) and H (field
+        # empty) can be treated differently by the server, so both are measured.
+        ("H", "pincode= (EMPTY string)", dict(base, pincode="")),
     ]
     if not args.skip_wrong_pin:
         cases.append(("E", "pin=<WRONG>", dict(base, pin=WRONG_PIN)))
@@ -324,6 +328,9 @@ def main():
     if not args.skip_disarm_test:
         disarm_cases = [
             ("F", "DISARM with NO pin field", dict(base, mode="disarm")),
+            # I: the integration's no-code case on a disarm (empty pincode field).
+            ("I", "DISARM with pincode= (EMPTY string)",
+             dict(base, mode="disarm", pincode="")),
         ]
         if not args.skip_wrong_pin:
             disarm_cases.append(
