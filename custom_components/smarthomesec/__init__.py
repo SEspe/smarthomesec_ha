@@ -52,6 +52,8 @@ from .const import (
     EVENT_TIME_FUTURE_TOLERANCE,
     REPORT_EVENT_KEY,
     REST_POLL_INTERVAL,
+    CONF_POLL_INTERVAL,
+    MIN_REST_POLL_INTERVAL,
     CID_LENGTH,
     CID_ALARM_QUALIFIER,
     CID_RESTORE_QUALIFIER,
@@ -128,8 +130,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
 
+    poll_interval = entry.options.get(CONF_POLL_INTERVAL, REST_POLL_INTERVAL)
+
     try:
-        coordinator = SmarthomesecCoordinator(hass, username, password)
+        coordinator = SmarthomesecCoordinator(hass, username, password, poll_interval)
 
         # Først login (blokkerende → executor)
         await hass.async_add_executor_job(coordinator.login)
@@ -160,9 +164,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "alarm_areas": alarm_areas,
     }
 
+    # Changing the poll interval in the options takes effect after a reload.
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry so a new poll interval takes effect."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -293,12 +305,18 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
 
 
-    def __init__(self, hass: HomeAssistant, username: str, password: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        username: str,
+        password: str,
+        poll_interval: int = REST_POLL_INTERVAL,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name="Smarthomesec",
-            update_interval=timedelta(seconds=REST_POLL_INTERVAL),
+            update_interval=timedelta(seconds=max(poll_interval, MIN_REST_POLL_INTERVAL)),
         )
 
         self.hass = hass

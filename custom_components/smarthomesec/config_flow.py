@@ -7,16 +7,28 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import (
     CONF_NAME,
     CONF_PASSWORD,
     CONF_USERNAME,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN, API_BASEHOST, API_BASEPATH
+from .const import (
+    DOMAIN,
+    API_BASEHOST,
+    API_BASEPATH,
+    CONF_POLL_INTERVAL,
+    MIN_REST_POLL_INTERVAL,
+    REST_POLL_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +52,12 @@ DATA_SCHEMA = vol.Schema(
 
 class SmarthomesecConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     """Smarthomesec config flow."""
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow that sets the poll interval."""
+        return SmarthomesecOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -105,6 +123,27 @@ class SmarthomesecConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 CONF_PASSWORD: password,
             },
         )
+
+
+class SmarthomesecOptionsFlow(OptionsFlow):
+    """Options: how often to poll the server as a safety net."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show or save the poll interval."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self.config_entry.options.get(CONF_POLL_INTERVAL, REST_POLL_INTERVAL)
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_POLL_INTERVAL, default=current): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_REST_POLL_INTERVAL)
+                ),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
 
 
 def test_host_connection(username: str, password: str) -> None:

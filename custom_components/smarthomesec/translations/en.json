@@ -24,6 +24,19 @@
       "unknown": "Unknown"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling",
+        "data": {
+          "poll_interval": "Poll interval (seconds)"
+        },
+        "data_description": {
+          "poll_interval": "How often the integration asks the server for the alarm state, as a safety net when the live connection is down. Default 300, minimum 60. Lower values make more requests to the vendor's server."
+        }
+      }
+    }
+  },
   "issues": {
     "deprecated_yaml_import_issue_cannot_connect": {
       "title": "The SmartHomeSec YAML configuration import failed",
