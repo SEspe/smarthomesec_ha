@@ -42,14 +42,14 @@ alarm behaves and how to automate on it, and [`docs/VESTA_API.md`](docs/VESTA_AP
 measured API: hosts, auth, endpoints, alarm detection via Contact ID, and the WebSocket protocol.
 Unofficial and unaffiliated with Climax, VESTA, or any alarm provider.
 
-## Installation-ha
-Under HACS -> Integrations, add custom repository "https://github.com/SEspe/smarthomesec_ha/ with Category "Integration". 
+## Installation
+Under HACS -> Integrations, add custom repository `https://github.com/SEspe/smarthomesec_ha` with category "Integration".
 
 Search for repository "smarthomesec_ha" and download it. Restart Home Assistant.
 
-Go to Settings > Integrations and Add Integration "SmartHomeSec". Type in xxx
+Go to Settings > Integrations and add the integration "SmartHomeSec". Enter the account name and password for your SmartHomeSec login, and a name for the alarm. If your login is rejected, see the notes in `docs/HOME_ASSISTANT.md`.
 
-Click Configure and choose fractions to create sensors.
+Click Configure to change how often the integration polls the server (default 300 seconds, minimum 60).
 
 Restart Home Assistant.
 
