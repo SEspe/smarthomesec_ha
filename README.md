@@ -52,3 +52,7 @@ logger:
 ## Credits
 
 This integration started as [koying/smarthomesec_ha](https://github.com/koying/smarthomesec_ha) by Chris Browet (koying). This repository is a fork of that project, adapted for HACS and maintained separately from upstream. The commit history shows which changes are which. Thanks to the upstream author for the original work.
+
+## License
+
+This repository is dedicated to the public domain under [CC0 1.0 Universal](LICENSE). Upstream's author has said the upstream repository is public domain too.
