@@ -55,4 +55,6 @@ This integration started as [koying/smarthomesec_ha](https://github.com/koying/s
 
 ## License
 
-This repository is dedicated to the public domain under [CC0 1.0 Universal](LICENSE). Upstream's author has said the upstream repository is public domain too.
+This repository is released under the [MIT License](LICENSE). The upstream project,
+[koying/smarthomesec_ha](https://github.com/koying/smarthomesec_ha), was described by its author as
+public domain; the changes in this fork are MIT.

@@ -2,7 +2,9 @@
 
 ## Status
 
-This repository is dedicated to the public domain under [CC0 1.0 Universal](../LICENSE).
+This repository is released under the [MIT License](../LICENSE). The changes in this fork are MIT.
+
+Why MIT and not CC0: HACS's license check requires an OSI-approved license. CC0 is not OSI-approved, and a strict HACS validation run on this repo failed on it (PR #42, `HACS` job, `Validation license`). MIT passes that check. Upstream's author's public-domain statement (below) is unaffected: public-domain code can be used under any license.
 
 ## Basis
 
