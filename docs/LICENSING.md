@@ -15,4 +15,4 @@ His reply, verbatim, posted 2026-11-07 08:55 UTC:
 >
 > Thanks
 
-Upstream has not added a LICENSE file. We have not asked him to add one; he is not currently active on the project.
+Upstream has not added a LICENSE file. We have not asked him to add one.
