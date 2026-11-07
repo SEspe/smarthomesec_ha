@@ -24,7 +24,7 @@ dispatch a guard. Arrange test mode with them first.
 
 ## Security: the PIN is not a second factor
 
-Measured on a VESTA panel in November 2026:
+Measured on a VESTA panel. First documented on 2026-09-22 and reproduced on 2026-11-07:
 
 - **Arming needs no PIN.** Arming worked with a correct, missing, empty or wrong PIN.
 - **Disarming without a PIN succeeds.** A disarm request with no PIN, or an empty one, switches the
