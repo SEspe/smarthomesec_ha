@@ -22,6 +22,19 @@ change the host before the password** — and note that login is rate-limited pe
 Your provider's alarm central is real: arming, disarming and any test alarm reaches people who may
 dispatch a guard. Arrange test mode with them first.
 
+## Security: the PIN is not a second factor
+
+- **A request without a PIN is accepted.** The server checks the PIN only when a request includes
+  one. Other clients for the same backend send no PIN at all, and the server accepts them.
+- **A wrong PIN is refused.** Arming or disarming with a wrong PIN returns an error, and on a
+  disarm the panel stays armed.
+- **Your account password is the real protection.** Anyone who has it can arm and disarm the alarm,
+  with or without a PIN. Use a strong, unique password, and remember that Home Assistant stores it
+  in the config entry.
+
+For the details, see [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) and
+[`docs/VESTA_API.md`](docs/VESTA_API.md).
+
 See [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) for what entities you get, how a triggered
 alarm behaves and how to automate on it, and [`docs/VESTA_API.md`](docs/VESTA_API.md) for the
 measured API: hosts, auth, endpoints, alarm detection via Contact ID, and the WebSocket protocol.
