@@ -18,7 +18,7 @@
 
 - [ ] **README placeholders.** The install section has the heading `## Installation-ha` and the text `Type in xxx`. The HACS URL line has a trailing space.
 - [ ] **Manifest `categories`.** HACS warns that `manifest.json` has no categories. A warning only; optional.
-- [ ] **Probe: arm with a wrong `pincode`.** The 2026-11-07 run sent the wrong PIN in the `pin` field (case E), not `pincode`. The 2026-09-22 measurement (400) covers `pincode`, but it has not been re-measured.
+- [x] **Probe: arm with a wrong `pincode`.** Accepted as settled by the 2026-09-22 measurement (HTTP 400, nothing armed). The 2026-11-07 run used `pin` for its wrong-PIN arm (case E), so it doesn't repeat this; no re-run planned.
 - [ ] **Probe output.** `result.txt` sits untracked in the repo root. Move it out, or delete it.
 - [ ] **Local HA 2026.1 tests.** They can't run on native Windows (`runner.py` imports `fcntl`). CI on Linux is the only test run. WSL is not installed.
 
