@@ -105,6 +105,13 @@ REPORT_EVENT_KEY = "report_event_latest"
 # under testalarmen. Det er ALARM-eventet som redder den, ikke dørklokka.
 REST_POLL_INTERVAL = 300
 
+# Configurable via the integration's options (Settings > Devices & services >
+# SmartHomeSec > Configure). Lower values make more requests to the vendor's
+# server; 60 s is the floor, so the poll always keeps at least ten attempts
+# inside ALARM_EVENT_MAX_AGE.
+CONF_POLL_INTERVAL = "poll_interval"
+MIN_REST_POLL_INTERVAL = 60
+
 # Hvor fersk hendelsen må være for å regnes som live.
 # Beskytter mot å utløse alarm på historikk – f.eks. ved oppstart mot en
 # gammel hendelse, eller hvis panelet spiller av en eldre rapport på nytt.
