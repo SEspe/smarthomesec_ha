@@ -57,8 +57,8 @@ Useful flags:
     --host HOST          default portal.vestasecurity.eu
     --area N             default 1
     --mode home|arm      which arm mode to test (default: home)
-    --skip-wrong-pin     leave out step E
-    --skip-disarm-test   leave out phase 2 (F and G)
+    --skip-wrong-pin     leave out step E (and G)
+    --skip-disarm-test   leave out phase 2 (F, G and I)
     --yes                skip the confirmation prompt
     --out result.txt     write the report (contains no PIN and no token)
 
@@ -89,6 +89,8 @@ and restoring the mode it found at the start:
     B  pin=<correct>                  is `pin` accepted at all?
     C  pin + pincode, both correct    is a both-keys fallback viable?
     D  (no PIN field whatsoever)      does it arm with NO pin?  <- the key test
+    H  pincode=  (field EMPTY)        what the integration sends when HA passes no
+                                      code. Can differ from D - measured separately.
     E  pin=<wrong>                    if this ARMS, `pin` is ignored entirely
 
 Then phase 2. Arming without a code is normal and deliberate on many panels -
