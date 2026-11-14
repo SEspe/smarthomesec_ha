@@ -421,3 +421,59 @@ def test_stop_client_closes_the_socket_and_flags_the_loop(close_raises):
 
     assert ws.stop is True
     ws.wsc.close.assert_called_once()
+
+
+# ----------------------------------------------------------------------
+# Ownership guard: a client the coordinator no longer owns must die.
+#
+# Seen in production on 2026-11-14: after a token-error race the coordinator
+# created a fresh client while the previous one was still running, and nothing
+# ever called stop_client() on it. It kept reconnecting with a dead token every
+# 47 seconds for hours (45 s server close + 2 s backoff, ~76 warnings/hour)
+# while its frames were silently discarded as coming from a stale client.
+# ----------------------------------------------------------------------
+
+
+def test_a_client_that_no_longer_owns_the_connection_exits_the_loop(caplog):
+    caplog.set_level(logging.DEBUG, logger=WS_MOD)
+    coordinator, ws = _client()
+    coordinator.wsc = object()  # the coordinator has moved on to another client
+
+    apps, sleep = _run(ws, [_drop_quickly] * 3)
+
+    assert apps == []  # it must not dial again
+    assert ws.stop is True  # it flagged itself out of the loop
+    assert not sleep.called
+    assert "no longer the coordinator's client" in caplog.text
+
+
+def test_a_real_error_from_a_stale_client_is_not_reported(caplog):
+    caplog.set_level(logging.DEBUG, logger=WS_MOD)
+    coordinator, ws = _client()
+    coordinator.wsc = object()
+
+    ws._on_error(None, Exception("Connection closed"))
+
+    assert coordinator.calls == []
+    assert "stale client" in caplog.text
+
+
+def test_an_error_during_a_restart_window_is_still_reported():
+    """self.wsc is None mid-restart: the error must reach the coordinator."""
+    coordinator, ws = _client()
+    coordinator.wsc = None
+    err = Exception("handshake failed")
+
+    ws._on_error(None, err)
+
+    assert coordinator.calls == [("WebSocketError", err)]
+
+
+def test_a_legitimate_owner_keeps_reconnecting():
+    """The guard must not stop the client the coordinator actually owns."""
+    coordinator, ws = _client()
+    coordinator.wsc = ws
+
+    apps, sleep = _run(ws, [_drop_quickly, _stop])
+
+    assert len(apps) == 2
