@@ -240,7 +240,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class SmarthomesecCoordinator(DataUpdateCoordinator):
-
+    # Class-level defaults for the vendor API protection state. Instances set
+    # their own values in __init__; these also cover instances built without
+    # __init__ (the unit tests use object.__new__).
+    _shutdown = False
+    _last_login_at: float | None = None
+    _login_pending = False
+    _gave_up = False
+    _episode_started: float | None = None
+    _last_42_at: float | None = None
 
     def _update_device_types(self, status):
         self._pir_devices = set()
