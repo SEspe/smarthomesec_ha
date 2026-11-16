@@ -36,6 +36,9 @@ None.
 - **Probe output** `result.txt` moved out of the repo root.
 - **Probe: arm with a wrong `pincode`.** Settled by the 2026-09-22 measurement (HTTP 400, nothing armed). No re-run planned.
 - **Session notes and TODO** (PR #45, merged).
+- **Fix for the orphaned WebSocket thread** (PR #48, koying). Merged 2026-11-16 after all five checks passed. Included in 0.1.24.
+- **Release 0.1.24** with `CHANGELOG.md` (new file). Tag `0.1.24`.
+- **Branch protection on `main`:** blocks force pushes and deletion, and requires the five CI checks before merge. Pull request reviews are not required. Direct pushes need the checks to pass too, so version bumps go through a PR.
 
 ## Session notes: 2026-11-07
 
@@ -49,6 +52,13 @@ None.
 - **Upstream issue #3:** Chris's reply on 2026-11-07 is recorded verbatim in `docs/LICENSING.md`.
 - **Local Python:** `uv` manages Python 3.12 and 3.13. The 239-test suite passes on 3.12 with HA 2025.1.4. On HA 2026.1 only CI can run the tests.
 - **Git identity:** the repo has no `user.name` or `user.email`. Commits use `-c user.name="Claude Code" -c user.email=...` for each command.
+
+## Session notes: 2026-11-16
+
+- **PR #48 (koying):** reviewed the diff. The guard runs before each reconnect and at error time. Checked that the coordinator sets the new client before the new thread starts, so the new client isn't stopped on its first loop. Ran the suite on the PR's code locally: 243 passed (239 before, plus the 4 new tests). A limit remains: the guard acts between connections, so a stale client that stays connected keeps its socket until the server drops it.
+- **Local test run:** the auto-mode classifier blocked the first attempt to run PR code locally. The owner ran the tests in their own terminal. `findstr /R` needs `|` between words, not spaces, and `%ERRORLEVEL%` in a single line is read before pytest runs, so use a separate line to check exit codes.
+- **Branch protection** set on `main` (two rules, see Done).
+- **Release 0.1.24:** version bump, new `CHANGELOG.md`, and this file in one PR, so it passes the checks before reaching `main`.
 
 ## Session notes: 2026-11-07 (cleanup)
 
