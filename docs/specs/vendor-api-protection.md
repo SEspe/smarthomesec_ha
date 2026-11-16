@@ -50,6 +50,10 @@ in roughly 20 minutes) for as long as the loop ran.
 - Each consecutive failed recovery (token error, or disconnect before a `42` event)
   increases a counter `n`.
 - Delay before the next attempt: `min(20 s × 2^(n−1), 30 min)`.
+  **As implemented:** the 20 s retry applies to the first failure. From the second failure the
+  integration uses a login, which the 5-minute cooldown spaces out, so the effective interval is
+  at least 5 minutes. `backoff_delay()` keeps the formula and is tested, but only its first step
+  is used. Decide whether the exponential steps are still wanted.
 - The counter resets when a `42` event arrives, or when the connection has stayed up for
   **10 minutes**.
 
