@@ -64,6 +64,13 @@ logger:
     custom_components.smarthomesec: debug
 ```
 
+## Protecting the vendor API
+
+The vendor's API is undocumented, and this integration is unofficial. It limits its own logins
+(at most one every 5 minutes), backs off when the live connection is rejected, and stops retrying
+after repeated failures. If that happens, Home Assistant shows a Repairs issue. Give each Home
+Assistant instance its own SmartHomeSec user. Details: [`docs/API_PROTECTION.md`](docs/API_PROTECTION.md).
+
 ## Credits
 
 This integration started as [koying/smarthomesec_ha](https://github.com/koying/smarthomesec_ha) by Chris Browet (koying). This repository is a fork of that project, adapted for HACS and maintained separately from upstream. The commit history shows which changes are which. Thanks to the upstream author for the original work.

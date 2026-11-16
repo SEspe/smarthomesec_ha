@@ -365,7 +365,8 @@ def test_token_error_does_not_reset_its_own_counter():
 
 
 def test_second_token_error_forces_a_login():
-    """With the counter no longer self-resetting, the escalation is live again."""
+    """The second failure escalates to a login. The counter is NOT reset there:
+    only a live 42 event resets it, so the give-up threshold can be reached."""
     coord = _callback_coordinator()
     coord._ws_token_errors = 1
     coord.wsc = MagicMock()
@@ -377,7 +378,7 @@ def test_second_token_error_forces_a_login():
 
     mock_login.assert_called_once()
     mock_restart.assert_not_called()
-    assert coord._ws_token_errors == 0
+    assert coord._ws_token_errors == 2
 
 
 def test_restart_ws_now_swaps_the_client():
