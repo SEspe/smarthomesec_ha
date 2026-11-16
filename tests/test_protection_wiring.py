@@ -137,19 +137,41 @@ def test_a_live_42_event_clears_give_up():
     assert coord._ws_token_errors == 0
 
 
-def test_live_connection_needs_a_recent_live_event_and_no_failures():
+def test_live_connection_is_on_once_the_handshake_is_accepted():
+    """Up = handshake accepted (40). It does not wait for a live event (42)."""
     coord = _coord()
-    assert coord.live_connected is False  # no live event seen yet
+    assert coord.live_connected is False  # no handshake yet
 
-    coord._last_42_at = time.monotonic()
+    coord._last_40_at = time.monotonic()
+    assert coord.live_connected is True  # no 42 event needed
+
+
+def test_a_token_rejection_after_the_handshake_turns_it_off():
+    coord = _coord()
+    coord._last_40_at = time.monotonic() - 5
+    coord._last_error_at = time.monotonic()  # rejected after that handshake
+
+    assert coord.live_connected is False
+
+    coord._last_40_at = time.monotonic()  # a new handshake after the rejection
     assert coord.live_connected is True
 
-    coord._ws_token_errors = 1
-    assert coord.live_connected is False
 
-    coord._ws_token_errors = 0
+def test_give_up_turns_it_off_even_with_a_handshake():
+    coord = _coord()
+    coord._last_40_at = time.monotonic()
     coord._gave_up = True
     assert coord.live_connected is False
+
+
+def test_handshake_message_sets_the_live_flag_through_callback():
+    coord = _coord()
+    coord.wsc = MagicMock()
+
+    coord.callback("40", '{"sid":"abc"}', sender=coord.wsc)
+
+    assert coord._last_40_at is not None
+    assert coord.live_connected is True
 
 
 def test_manual_retry_respects_the_cooldown():

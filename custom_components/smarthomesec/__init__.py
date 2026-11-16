@@ -255,6 +255,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
     _gave_up = False
     _episode_started: float | None = None
     _last_42_at: float | None = None
+    _last_40_at: float | None = None  # last accepted Socket.IO CONNECT
+    _last_error_at: float | None = None  # last token rejection (code 44)
 
     def _update_device_types(self, status):
         self._pir_devices = set()
@@ -521,12 +523,19 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
     @property
     def live_connected(self) -> bool:
-        """True while live WebSocket events are arriving (the "Live connection" sensor)."""
-        return (
-            not getattr(self, "_gave_up", False)
-            and getattr(self, "_ws_token_errors", 0) == 0
-            and getattr(self, "_last_42_at", None) is not None
-        )
+        """True while the live channel is up (the "Live connection" sensor).
+
+        Up = the server accepted the latest connection (Socket.IO CONNECT, code 40)
+        and no token rejection (code 44) came after it. Does not wait for a live
+        event, because a quiet home may send none for a long time.
+        """
+        if getattr(self, "_gave_up", False):
+            return False
+        accepted = getattr(self, "_last_40_at", None)
+        if accepted is None:
+            return False
+        failed = getattr(self, "_last_error_at", None)
+        return failed is None or accepted > failed
 
     def _notify_live_changed(self) -> None:
         """Refresh entities that depend on live state. Safe from any thread."""
@@ -1285,6 +1294,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             # The counter is NOT reset here any more; only a live 42 event
             # resets it, so give-up can actually be reached.
             now = time.monotonic()
+            self._last_error_at = now
             if self._episode_started is None:
                 self._episode_started = now
 
@@ -1352,6 +1362,12 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             self._login_or_defer("forced login")
             return
 
+
+        # Socket.IO CONNECT accepted: the live channel is up (see live_connected).
+        if message == "40":
+            self._last_40_at = time.monotonic()
+            self._notify_live_changed()
+            return
 
         # Socket.IO ping
         if message == "3":
