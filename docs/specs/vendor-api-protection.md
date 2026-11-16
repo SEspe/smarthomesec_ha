@@ -63,9 +63,35 @@ in roughly 20 minutes) for as long as the loop ran.
   - log **one** ERROR with the reason;
   - create a **Repairs issue** (`token_loop`) in Home Assistant with a short explanation and
     the advice to use a separate account per Home Assistant instance;
-  - expose a state for it (see open questions).
+  - turn the **Live connection** sensor off (see section 5).
 - Recovery: the issue is cleared automatically when a `42` event arrives (the connection is
   healthy again), or when the config entry is reloaded.
+
+### 5. Entities and the "Live connection" sensor
+
+- Alarm and sensor entities **stay available** during give-up. Polling still reads the real
+  alarm state, so marking them unavailable would be misleading.
+- A new diagnostic binary sensor, **Live connection**, is **on** while the WebSocket is
+  healthy and **off** during give-up or while a recovery is pending. It is the visible signal
+  that live events are not arriving; alarm state still arrives by polling, at most 5 minutes
+  late.
+- Entity category: diagnostic, so it stays out of the default dashboards.
+
+### 6. Login rules
+
+Two kinds of call, two rules:
+
+- **Background polls** (`REST 401` during a poll): never log in while the cooldown is active.
+  The poll skips, and the next poll tries again. At most one poll interval of stale state.
+- **User commands** (arm, disarm, retry button): one login is allowed if the cooldown has
+  passed. If it has not, the command fails at once with the time left to wait, rather than
+  hanging.
+
+### 7. Retry button
+
+A **Retry connection** button on the integration. It starts a login and a reconnect at once,
+and resets the give-up state. It still respects the cooldown, so repeated presses cannot
+bypass it.
 
 ### 4. Message wording
 
@@ -81,16 +107,12 @@ Short, plain, English. Example for the Repairs issue:
 1. **Cooldown length:** 5 minutes, or longer? Shorter values give faster recovery, longer
    values reduce load on the vendor.
 2. **Give-up threshold:** 5 failures, or 60 minutes, whichever comes first. Are those right?
-3. **Entity state during give-up:** keep the alarm entities available (REST still works),
-   or mark them unavailable? Keeping them available seems right, since the state is still
-   read correctly. A separate diagnostic binary sensor "Live connection" (off during
-   give-up) would make the situation visible without changing the alarm entities.
-4. **Manual retry:** should there be a button or service to retry after the user has fixed
-   the account? Without one, reloading the entry is the only way.
-5. **Logins during REST 401:** a 401 on a poll currently forces a login immediately. Should
-   it respect the cooldown as well? Proposed: yes, and a poll during cooldown waits for the
-   next poll rather than logging in.
-6. **Languages:** Repairs and entity text in English only, or also Norwegian (`no.json`)?
+3. **Entity state during give-up:** decided. Alarm entities stay available; a "Live
+   connection" diagnostic sensor shows the state (section 5).
+4. **Manual retry:** decided. A "Retry connection" button (section 7).
+5. **Logins during REST 401:** decided. Polls never log in during cooldown; user commands get
+   one login if allowed, otherwise an immediate error (section 6).
+6. **Languages:** decided. English and Norwegian (`no.json`), both updated together.
 
 ## Test plan
 
