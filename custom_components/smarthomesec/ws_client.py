@@ -208,6 +208,22 @@ class WSClient(threading.Thread):
 
         while not self.stop:
 
+            # Eierskapsvakt: koordinatoren kan ha byttet til en ny klient uten at
+            # denne tråden fikk stop_client() – typisk når self.wsc alt var None
+            # (token-error-grenen) i det den gamle socketen meldte "check token
+            # error!". Da finnes det ingen annen mekanisme som stopper tråden, og
+            # den reconnecter med et dødt token for alltid: målt 14.11.2026, en
+            # foreldreløs klient koblet opp hvert 47. sekund (~76 WARNING/time) i
+            # timer, ved siden av den friske. Er vi ikke lenger self.client.wsc,
+            # gir vi oss selv beskjed. Er self.wsc None er vi midt i en restart og
+            # kjører videre.
+            owner = getattr(self.client, "wsc", None)
+            if owner is not None and owner is not self:
+                LOG.debug("WS: no longer the coordinator's client – exiting")
+                self._stop_heartbeat()
+                self.stop = True
+                break
+
             LOG.debug("WebSocket: run_forever() starting")
 
             self.wsc = websocket.WebSocketApp(
@@ -304,6 +320,15 @@ class WSClient(threading.Thread):
         # opcode=8 er NORMAL disconnect fra SmartHomeSec
         if "opcode=8" in str(error):
             LOG.debug("WebSocket closed normally: %s", error)
+            return
+
+        # En klient vi ikke lenger eier er en zombie på vei ut (se
+        # eierskapsvakten i run()). Dens feil skal ikke fylle journalen.
+        # Bare når koordinatoren faktisk eier en ANNEN klient: er self.wsc None
+        # er vi midt i en restart, og da skal feilen rapporteres som før.
+        owner = getattr(self.client, "wsc", None)
+        if owner is not None and owner is not self:
+            LOG.debug("WebSocket error from a stale client (ignored): %s", error)
             return
 
         LOG.warning("WebSocket error: %s", error)
