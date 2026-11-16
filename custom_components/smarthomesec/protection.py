@@ -31,6 +31,22 @@ class CooldownActive(HomeAssistantError):
         )
 
 
+class ConnectionGivenUp(CooldownActive):
+    """Automatic retries are stopped (give-up). Polls and commands do not log in.
+
+    Recovery is the Retry connection button or a reload. Subclasses CooldownActive
+    so existing handlers (poll skip, command error) treat it the same way.
+    """
+
+    def __init__(self) -> None:
+        HomeAssistantError.__init__(
+            self,
+            "SmartHomeSec live connection is stopped to protect the account. "
+            "Fix the account (one user per Home Assistant), then press Retry connection.",
+        )
+        self.seconds = 0.0
+
+
 def cooldown_remaining(last_login: float | None, now: float) -> float:
     """Seconds until another login is allowed. 0 means allowed now."""
     if last_login is None:
