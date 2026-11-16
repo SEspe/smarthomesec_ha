@@ -430,6 +430,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             json_dict = res.json()
             self.token = json_dict["token"]
             self.userid = json_dict["data"]["user_id"]
+            self._token_issued = time.monotonic()
+            _LOGGER.debug("Token issued: %s", self.token_info())
 
             if immediate_ws:
                 _LOGGER.debug("Token refreshed → swapping WS to the new token")
@@ -442,6 +444,15 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
         _LOGGER.debug("Logged in")
+
+    def token_info(self) -> str:
+        """Fingerprint and age of the current token, for logs. Never the token itself."""
+        if not self.token:
+            return "token=none"
+        fp = hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:8]
+        issued = getattr(self, "_token_issued", None)
+        age = "?" if issued is None else f"{time.monotonic() - issued:.1f}s"
+        return f"token_fp={fp} age={age}"
 
     @staticmethod
     def _server_said(res) -> str:
@@ -1079,6 +1090,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
 
             self._ws_token_errors += 1
 
+            _LOGGER.debug("WS rejected: %s", self.token_info())
             _LOGGER.warning(
                 "WS token error (%s) – handling...", self._ws_token_errors
             )

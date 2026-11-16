@@ -225,6 +225,9 @@ class WSClient(threading.Thread):
                 break
 
             LOG.debug("WebSocket: run_forever() starting")
+            info = getattr(self.client, "token_info", None)
+            if info is not None:
+                LOG.debug("WS connect attempt: %s", info())
 
             self.wsc = websocket.WebSocketApp(
                 wsc_url,
