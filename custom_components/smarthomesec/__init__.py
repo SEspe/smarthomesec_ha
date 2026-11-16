@@ -446,7 +446,14 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Logged in")
 
     def token_info(self) -> str:
-        """Fingerprint and age of the current token, for logs. Never the token itself."""
+        """Fingerprint and age of the current token, for logs. Never the token itself.
+
+        Added while chasing a WebSocket "check token error!" loop (2026-11-16).
+        The loop was caused by two Home Assistant instances, production and a
+        test unit, logging in to the same SmartHomeSec account: every login
+        invalidates the other session's token. Each instance needs its own
+        account. See docs/TODO.md.
+        """
         if not self.token:
             return "token=none"
         fp = hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:8]
