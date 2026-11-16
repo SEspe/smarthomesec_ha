@@ -4,15 +4,28 @@
 
 - [ ] **Vendor disclosure (disarm without a PIN).** Disarming with no PIN, or with an empty PIN, succeeds on a VESTA panel. First documented in `docs/VESTA_API.md` on 2026-09-22, reproduced by the probe on 2026-11-07. The README security section (PR #40, merged) says so. Decide whether to tell the alarm provider, and what, before anything else is published.
 - [ ] **HACS default store (`hacs/default`).** A strict HACS run passes every check on the MIT version (2026-11-07). Hold submission until the vendor question is settled.
+- [ ] **Production upgrade.** Production HA is still on 0.1.24, which has no vendor API protection. It is the unprotected side of the two-instance loop. Upgrade it to a beta, or to the next stable release, once the test unit has run cleanly for a while. Decide which.
+- [ ] **Stable release.** `0.1.25b3` is a pre-release. Promote it to a stable release (for example `0.1.25`) once the test unit has run cleanly for a while.
+
+## Pending verification (test unit on 0.1.25b3)
+
+- [ ] **Run for some hours.** Check: no login more often than every 5 minutes; give-up after 5 failures (or an hour); Repairs card shows its title and description; Retry connection works after the cause is fixed; the Live connection sensor is on while connected, even when no live events arrive.
+- [ ] **Production stays stable.** Once the test unit is on 0.1.25b3, production should show no new token errors. Check with a production log for the same period.
 
 ## Waiting on others
 
 - [ ] **Upstream license.** [koying/smarthomesec_ha#3](https://github.com/koying/smarthomesec_ha/issues/3): Chris replied that he is fine with the fork and considers the upstream repo public domain. He has not added a LICENSE upstream. Issue left open; nothing to do unless he adds one.
+- [ ] **Upstream PR #48 (koying).** Merged here. Upstream may still want the change; nothing to do.
 
 ## Open (smaller)
 
+- [ ] **Spec: 10-minute stable-connection reset.** Not implemented. Only a live 42 event resets the failure counter. The live sensor now uses the handshake (40) instead, so decide whether the 10-minute reset is still needed.
+- [ ] **Spec: exponential backoff.** Only the first 20 s step is used; from the second failure, the 5-minute login cooldown spaces the retries. Decide whether the exponential steps are still wanted (see `docs/specs/vendor-api-protection.md`).
 - [ ] **Manifest `categories`.** HACS warns that `manifest.json` has no categories. A warning only; optional. Needs a choice of category (for example `hub`, `device`, `service`, `system`).
 - [ ] **Local HA 2026.1 tests.** They can't run on native Windows (`runner.py` imports `fcntl`). CI on Linux is the only test run. WSL is not installed.
+- [ ] **Repairs "Ignore".** Ignoring the card hides it, and the integration keeps giving up. Decide whether the card should stay visible until the cause is fixed.
+- [ ] **Two instances on one account.** Documented in `docs/API_PROTECTION.md`. Consider a warning in the config flow or Repairs when a second instance is detected.
+- [ ] **SSDP noise.** Home Assistant logs `Duplicate 'SERVER' header found` tracebacks from a LAN device every ten minutes. Not ours; can be reported upstream to Home Assistant.
 
 ## Open PRs
 
@@ -35,34 +48,25 @@ None.
 - **README install section** fixed: heading, quote, placeholders, and the Configure option (PR #46, merged).
 - **Probe output** `result.txt` moved out of the repo root.
 - **Probe: arm with a wrong `pincode`.** Settled by the 2026-09-22 measurement (HTTP 400, nothing armed). No re-run planned.
-- **Session notes and TODO** (PR #45, merged).
-- **Fix for the orphaned WebSocket thread** (PR #48, koying). Merged 2026-11-16 after all five checks passed. Included in 0.1.24.
-- **Release 0.1.24** with `CHANGELOG.md` (new file). Tag `0.1.24`.
+- **Session notes and TODO** (PR #45, merged; PR #47 cleanup).
+- **Fix for the orphaned WebSocket thread** (PR #48, koying). Included in 0.1.24.
+- **Release 0.1.24** with `CHANGELOG.md`. Tag `0.1.24`.
 - **Branch protection on `main`:** blocks force pushes and deletion, and requires the five CI checks before merge. Pull request reviews are not required. Direct pushes need the checks to pass too, so version bumps go through a PR.
-
-## Session notes: 2026-11-07
-
-- **Probe run** (`tools/mode_probe`, home mode, run by the owner):
-  - Arming was accepted with a correct, absent, empty, or wrong `pin` (A to E). The wrong-PIN arm used the `pin` field, not `pincode`.
-  - Disarming with no PIN field (F) or an empty `pincode` (I) succeeded.
-  - Disarming with a wrong `pincode` (G) was refused: HTTP 400, code 996 "PIN Code Error". The panel stayed armed.
-  - The probe restored the panel to disarmed.
-  - D (arm with no PIN field) and F repeat the 2026-09-22 results. H (arm with an empty `pincode`) and I are new.
-- **Probe risk:** the probe logs in with the account password, and wrong-PIN attempts count toward the per-IP login lockout (about 3 failures, then 5 minutes).
-- **Upstream issue #3:** Chris's reply on 2026-11-07 is recorded verbatim in `docs/LICENSING.md`.
-- **Local Python:** `uv` manages Python 3.12 and 3.13. The 239-test suite passes on 3.12 with HA 2025.1.4. On HA 2026.1 only CI can run the tests.
-- **Git identity:** the repo has no `user.name` or `user.email`. Commits use `-c user.name="Claude Code" -c user.email=...` for each command.
+- **Vendor API protection** (PR #54, merged). Login cooldown (5 min), give-up after 5 failures or an hour, Repairs issue `token_loop`, Live connection sensor, Retry connection button, `docs/API_PROTECTION.md`.
+- **No logins while given up** (PR #55, merged). Polls and commands never log in while given up.
+- **Repairs text fix** (PR #57, merged). A duplicate `issues` block had dropped the text; a test now fails on duplicate keys.
+- **Live connection sensor on handshake** (PR #58, merged). On when the server accepts the connection (40), off after a later rejection (44) or during give-up.
+- **Pre-releases:** `0.1.25b1` (PR #51, closed; tag from PR #54), `0.1.25b2` (PR #56), `0.1.25b3` (PR #59). `0.1.25b3` is the current beta.
+- **Spec and user docs:** `docs/specs/vendor-api-protection.md` (PR #53 draft, spec branch) and `docs/API_PROTECTION.md`.
 
 ## Session notes: 2026-11-16
 
-- **PR #48 (koying):** reviewed the diff. The guard runs before each reconnect and at error time. Checked that the coordinator sets the new client before the new thread starts, so the new client isn't stopped on its first loop. Ran the suite on the PR's code locally: 243 passed (239 before, plus the 4 new tests). A limit remains: the guard acts between connections, so a stale client that stays connected keeps its socket until the server drops it.
-- **Local test run:** the auto-mode classifier blocked the first attempt to run PR code locally. The owner ran the tests in their own terminal. `findstr /R` needs `|` between words, not spaces, and `%ERRORLEVEL%` in a single line is read before pytest runs, so use a separate line to check exit codes.
-- **Branch protection** set on `main` (two rules, see Done).
-- **Release 0.1.24:** version bump, new `CHANGELOG.md`, and this file in one PR, so it passes the checks before reaching `main`.
-
-## Session notes: 2026-11-07 (cleanup)
-
-- **Merged:** #40 (README security), #41 (probe tool), #45 (this file), #46 (README install section). All CI green before merge.
-- **Open PRs:** none after the cleanup.
-- **Corrected:** the "new finding" in the 2026-11-07 probe is partly a repeat. Disarm without a PIN was already in `docs/VESTA_API.md` from 2026-09-22. The new data is the empty-`pincode` case (I).
-- **Remaining decisions:** vendor disclosure, then the HACS store submission.
+- **Loop cause confirmed.** Two Home Assistant instances (production and test) on the same SmartHomeSec account logged each other out. Each login invalidates the other's token. Production was stopped, and the test unit's loop stopped. Logs and the timeline are in the conversation, not in this file.
+- **Test unit on 0.1.25b2:** cooldown worked (logins 5 minutes apart). Give-up reached on the 5th failure, with one ERROR line and no logins afterwards.
+- **Retry connection:** pressed after the production unit was stopped. The connection was accepted and stayed up. The Repairs issue cleared.
+- **Repairs card showed the raw key** `smarthomesec: token_loop`. Cause: a duplicate `issues` block in `en.json` dropped the text. Fixed in PR #57.
+- **Live connection sensor** stayed off until the first live event (42). Changed to use the handshake (40) in PR #58.
+- **SSDP tracebacks** in the test unit's log come from Home Assistant's discovery code, not from SmartHomeSec. Not ours.
+- **Test HA tip:** the log export is capped (500 to 1000 lines). Use a time window or a shorter debug run when collecting logs.
+- **Classifier blocks** happened on `gh pr merge` once (PR #54). The merge was done on GitHub instead, and the rest of the merges went through.
+- **Next:** run `0.1.25b3` on the test unit for some hours, check production stays stable, then decide on the production upgrade and a stable release.
