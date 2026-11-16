@@ -24,6 +24,24 @@
       "unknown": "Unknown"
     }
   },
+  "issues": {
+    "token_loop": {
+      "title": "SmartHomeSec has stopped retrying the live connection",
+      "description": "SmartHomeSec keeps rejecting the connection token, so live events are off and the integration has stopped retrying to protect your account. The usual cause is another Home Assistant (or app) logging in with the same account. Give each Home Assistant its own SmartHomeSec user, then press Retry connection or reload the integration."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "live_connection": {
+        "name": "Live connection"
+      }
+    },
+    "button": {
+      "retry_connection": {
+        "name": "Retry connection"
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {

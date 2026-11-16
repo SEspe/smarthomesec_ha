@@ -1,0 +1,20 @@
+{
+  "issues": {
+    "token_loop": {
+      "title": "SmartHomeSec har stoppet forsøkene på live-forbindelsen",
+      "description": "SmartHomeSec avviser fortsatt innloggingstokenet, så live-hendelser er av, og integrasjonen har sluttet å prøve på nytt for å beskytte kontoen din. Vanligste årsak er at en annen Home Assistant (eller app) logger inn med samme konto. Gi hver Home Assistant sin egen SmartHomeSec-bruker, og trykk deretter «Prøv tilkobling på nytt» eller last integrasjonen på nytt."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "live_connection": {
+        "name": "Live-tilkobling"
+      }
+    },
+    "button": {
+      "retry_connection": {
+        "name": "Prøv tilkobling på nytt"
+      }
+    }
+  }
+}

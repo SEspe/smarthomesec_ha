@@ -16,6 +16,14 @@ import voluptuous as vol
 
 from custom_components.smarthomesec.ws_client import WSClient
 from custom_components.smarthomesec import redact
+from custom_components.smarthomesec.protection import (
+    LOGIN_COOLDOWN,
+    WS_GIVE_UP_FAILURES,
+    CooldownActive,
+    backoff_delay,
+    cooldown_remaining,
+    should_give_up,
+)
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
@@ -25,7 +33,9 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.core import callback as ha_callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -84,7 +94,28 @@ CONFIG_SCHEMA = vol.Schema(
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.ALARM_CONTROL_PANEL,
+    Platform.BUTTON,
 ]
+
+# Repairs issue shown when the integration has stopped retrying (see give-up).
+TOKEN_LOOP_ISSUE = "token_loop"
+
+
+@ha_callback
+def _async_set_token_loop_issue(hass: HomeAssistant, active: bool) -> None:
+    """Show or clear the Repairs issue. Runs in the event loop."""
+    if active:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            TOKEN_LOOP_ISSUE,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=TOKEN_LOOP_ISSUE,
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, TOKEN_LOOP_ISSUE)
 
 # Hvor lenge vi venter på at WS-tråden avslutter ved unload.
 WS_THREAD_JOIN_TIMEOUT = 10
@@ -157,6 +188,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Failed to connect to SmartHomeSec: %s", ex)
         return False
 
+    # A fresh setup starts with no give-up state, so no stale Repairs issue.
+    _async_set_token_loop_issue(hass, False)
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
@@ -188,6 +222,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not unload_ok:
         return False
+
+    # Reloading is the user's fix after a give-up, so the Repairs issue goes with it.
+    _async_set_token_loop_issue(hass, False)
 
     domain_data = hass.data.get(DOMAIN, {})
     data = domain_data.pop(entry.entry_id, None)
@@ -327,6 +364,12 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         self.status: dict | None = None
         self.wsc: WSClient | None = None
         self._shutdown: bool = False
+        # Vendor API protection (see protection.py and docs/specs/vendor-api-protection.md).
+        self._last_login_at: float | None = None  # monotonic time of last successful login
+        self._login_pending: bool = False  # a deferred login is already scheduled
+        self._gave_up: bool = False  # automatic WS/login retries stopped
+        self._episode_started: float | None = None  # first token failure of this episode
+        self._last_42_at: float | None = None  # last time the server sent a live event
         # Utløst alarm: område -> monotont tidspunkt for siste alarmhendelse.
         # Drevet av REST-feltet alarm_event_latest (se const.py).
         self._triggered_areas: dict[str, float] = {}
@@ -375,6 +418,14 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                         self.mark_areas_triggered([area_id])
 
                 return ret
+
+        except CooldownActive as err:
+            # A poll that needs a login during the cooldown skips: keep the last
+            # known data and try again at the next poll (spec section 6).
+            _LOGGER.debug("Poll skipped: %s", err)
+            if self.data is not None:
+                return self.data
+            raise UpdateFailed(str(err)) from err
 
         except Exception as err:
             if isinstance(err, asyncio.TimeoutError):
@@ -431,6 +482,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             self.token = json_dict["token"]
             self.userid = json_dict["data"]["user_id"]
             self._token_issued = time.monotonic()
+            self._last_login_at = self._token_issued
             _LOGGER.debug("Token issued: %s", self.token_info())
 
             if immediate_ws:
@@ -444,6 +496,88 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             raise Exception(f"Failed to connect to SmartHomeSec: {ex}") from ex
 
         _LOGGER.debug("Logged in")
+
+    # ------------------------------------------------------------------
+    # Vendor API protection (spec: docs/specs/vendor-api-protection.md)
+    # ------------------------------------------------------------------
+
+    def cooldown_remaining(self) -> float:
+        """Seconds until another login is allowed (0 = now)."""
+        return cooldown_remaining(getattr(self, "_last_login_at", None), time.monotonic())
+
+    @property
+    def live_connected(self) -> bool:
+        """True while live WebSocket events are arriving (the "Live connection" sensor)."""
+        return (
+            not getattr(self, "_gave_up", False)
+            and getattr(self, "_ws_token_errors", 0) == 0
+            and getattr(self, "_last_42_at", None) is not None
+        )
+
+    def _notify_live_changed(self) -> None:
+        """Refresh entities that depend on live state. Safe from any thread."""
+        try:
+            self.hass.add_job(self.async_update_listeners)
+        except Exception:  # pragma: no cover - hass may be absent in unit tests
+            pass
+
+    def _login_or_defer(self, reason: str) -> bool:
+        """Log in now if the cooldown allows, otherwise schedule it for the end of the cooldown.
+
+        Returns True if a login was started now.
+        """
+        remaining = self.cooldown_remaining()
+        if remaining <= 0:
+            self.login()
+            return True
+        _LOGGER.debug("Login deferred (%s): cooldown has %.0f s left", reason, remaining)
+        self._schedule_deferred_login(remaining)
+        return False
+
+    def _schedule_deferred_login(self, delay: float) -> None:
+        """One login after `delay` seconds. Repeated requests in the window coalesce."""
+        if self._login_pending or self._gave_up or self._shutdown:
+            return
+        self._login_pending = True
+
+        def _run():
+            time.sleep(delay)
+            self._login_pending = False
+            if self._shutdown or self._gave_up:
+                return
+            try:
+                self.login()
+            except Exception as ex:
+                _LOGGER.error("Deferred login failed: %s", ex)
+
+        threading.Thread(target=_run, daemon=True, name="shs-deferred-login").start()
+
+    def _give_up(self) -> None:
+        """Stop automatic WebSocket and login retries and tell the user (once)."""
+        if self._gave_up:
+            return
+        self._gave_up = True
+        _LOGGER.error(
+            "SmartHomeSec live connection stopped after repeated token rejections. "
+            "The integration has stopped retrying to protect the account. Usually another "
+            "Home Assistant or app logs in with the same account: give each one its own "
+            "SmartHomeSec user, then reload the integration or press Retry connection."
+        )
+        self.hass.add_job(_async_set_token_loop_issue, self.hass, True)
+        self._notify_live_changed()
+
+    def manual_retry(self) -> None:
+        """Retry connection button: one login now, if the cooldown allows."""
+        remaining = self.cooldown_remaining()
+        if remaining > 0:
+            raise CooldownActive(remaining, "retry")
+        _LOGGER.debug("Manual retry requested")
+        self._gave_up = False
+        self._ws_token_errors = 0
+        self._episode_started = None
+        self.hass.add_job(_async_set_token_loop_issue, self.hass, False)
+        self._notify_live_changed()
+        self.login()
 
     def token_info(self) -> str:
         """Fingerprint and age of the current token, for logs. Never the token itself.
@@ -529,6 +663,10 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             status_code = res.status_code
 
             if status_code == 401:
+                # Poll: never log in during the cooldown (spec section 6).
+                remaining = self.cooldown_remaining()
+                if remaining > 0:
+                    raise CooldownActive(remaining, "poll")
                 # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
                 self.login(immediate_ws=True)
                 loop += 1
@@ -595,6 +733,11 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             status_code = res.status_code
 
             if status_code == 401:
+                # User command (arm/disarm): one login if the cooldown allows,
+                # otherwise fail at once with the time left (spec section 6).
+                remaining = self.cooldown_remaining()
+                if remaining > 0:
+                    raise CooldownActive(remaining, "command")
                 # Ny login dreper WS-tokenet – bytt forbindelsen med en gang.
                 self.login(immediate_ws=True)
                 loop += 1
@@ -644,6 +787,9 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 self._update_device_types(self.status["data"])
                 _LOGGER.debug("Retrieving devices status")
                 return self.status["data"]
+            except CooldownActive:
+                # Not a transient error: retrying would only hit the cooldown again.
+                raise
             except Exception as e:
                 if attempt < 2:
                     _LOGGER.debug("Retrying update_status (%s/3)...", attempt + 2)
@@ -1115,14 +1261,26 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             # 🔥 LOGIKK
             # --------------------------------------------------
 
-            if self._ws_token_errors >= 2:
-                # ❗ token er mest sannsynlig invalid → hent ny
-                _LOGGER.warning("Too many token errors → forcing login")
+            # Vendor API protection: count the episode, stop for good when the
+            # failures pile up, and never log in faster than LOGIN_COOLDOWN.
+            # The counter is NOT reset here any more; only a live 42 event
+            # resets it, so give-up can actually be reached.
+            now = time.monotonic()
+            if self._episode_started is None:
+                self._episode_started = now
 
-                self._ws_token_errors = 0
+            if should_give_up(self._ws_token_errors, self._episode_started, now):
+                self._give_up()
+                return
+
+            self._notify_live_changed()
+
+            if self._ws_token_errors >= 2:
+                # ❗ token er mest sannsynlig invalid → hent ny (når cooldown tillater)
+                _LOGGER.warning("Too many token errors → login (cooldown permitting)")
 
                 try:
-                    self.login()
+                    self._login_or_defer("token error")
                 except Exception as e:
                     _LOGGER.error("Login failed after token error: %s", e)
 
@@ -1131,7 +1289,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning("WS token not ready – retrying with delay")
 
                 try:
-                    self.delayed_ws_restart()
+                    self.delayed_ws_restart(delay=backoff_delay(self._ws_token_errors))
                 except Exception as e:
                     _LOGGER.error("Delayed WS restart failed: %s", e)
 
@@ -1172,7 +1330,7 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             except:
                 pass
             self.wsc = None
-            self.login()
+            self._login_or_defer("forced login")
             return
 
 
@@ -1190,6 +1348,13 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
                 if self._ws_token_errors != 0:
                     _LOGGER.debug("WS healthy → reset token error counter")
                 self._ws_token_errors = 0
+            self._episode_started = None
+            self._last_42_at = time.monotonic()
+            if self._gave_up:
+                # Live events are back: the connection recovered on its own.
+                self._gave_up = False
+                self.hass.add_job(_async_set_token_loop_issue, self.hass, False)
+            self._notify_live_changed()
 
 
 

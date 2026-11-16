@@ -10,8 +10,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, TYPE_CLASS_BINARY_SENSOR
 from .base_entity import SmarthomesecBaseSensor
@@ -32,6 +35,34 @@ async def async_setup_entry(
     async_add_entities(
         SmarthomesecBinarySensor(coord, device, config_entry.entry_id) for device in devices
     )
+    async_add_entities([SmarthomesecLiveConnection(coord, config_entry.entry_id)])
+
+
+class SmarthomesecLiveConnection(CoordinatorEntity, BinarySensorEntity):
+    """On while live WebSocket events arrive; off during give-up or recovery.
+
+    Diagnostic: shows whether the vendor's live channel is working. Alarm state
+    still arrives by polling when this is off (spec section 5).
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "live_connection"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coord, entry_id: str) -> None:
+        super().__init__(coord)
+        self._attr_unique_id = f"{entry_id}_live_connection"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name="SmartHomeSec",
+            manufacturer="SmartHomeSec",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """True while live events are arriving."""
+        return self.coordinator.live_connected
 
 
 class SmarthomesecBinarySensor(SmarthomesecBaseSensor, BinarySensorEntity):
