@@ -17,6 +17,7 @@ import voluptuous as vol
 from custom_components.smarthomesec.ws_client import WSClient
 from custom_components.smarthomesec import redact
 from custom_components.smarthomesec.protection import (
+    ConnectionGivenUp,
     CooldownActive,
     backoff_delay,
     cooldown_remaining,
@@ -676,7 +677,10 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             status_code = res.status_code
 
             if status_code == 401:
-                # Poll: never log in during the cooldown (spec section 6).
+                # Poll: never log in while given up or during the cooldown
+                # (spec section 6). A given-up poll only reads nothing new.
+                if self._gave_up:
+                    raise ConnectionGivenUp()
                 remaining = self.cooldown_remaining()
                 if remaining > 0:
                     raise CooldownActive(remaining, "poll")
@@ -748,6 +752,8 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
             if status_code == 401:
                 # User command (arm/disarm): one login if the cooldown allows,
                 # otherwise fail at once with the time left (spec section 6).
+                if self._gave_up:
+                    raise ConnectionGivenUp()
                 remaining = self.cooldown_remaining()
                 if remaining > 0:
                     raise CooldownActive(remaining, "command")

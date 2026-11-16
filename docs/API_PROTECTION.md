@@ -39,6 +39,10 @@ work, but live events stop. When this happens:
 | **Live connection** (diagnostic sensor) | On: live events are arriving. Off: the live channel is down, or the integration has stopped retrying. Alarm state still updates by polling while it is off. |
 | **Retry connection** (button) | Starts one login and reconnects now. Only works once the cooldown has passed. |
 
+While the integration has given up, polls and commands do **not** log in at all. Polls keep the last
+known state, and commands fail with a message to press Retry connection. This is deliberate: an
+automatic login would drop the other instance's session and restart the loop.
+
 The Repairs issue goes away by itself when live events return. It also clears when you reload the
 integration.
 

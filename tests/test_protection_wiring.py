@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.smarthomesec import SmarthomesecCoordinator
-from custom_components.smarthomesec.protection import CooldownActive
+from custom_components.smarthomesec.protection import ConnectionGivenUp, CooldownActive
 
 
 def _coord() -> SmarthomesecCoordinator:
@@ -55,6 +55,35 @@ def test_command_401_during_cooldown_fails_fast_with_the_wait():
 
     mock_login.assert_not_called()
     assert info.value.seconds > 0
+
+
+def test_poll_401_while_given_up_never_logs_in_even_after_the_cooldown():
+    """Give-up stops polls from logging in. Only the Retry button or a reload recovers."""
+    coord = _coord()
+    coord._gave_up = True
+    coord._last_login_at = None  # cooldown long over: the old rule would have allowed a login
+
+    with patch(
+        "custom_components.smarthomesec.requests.get", return_value=_http(401)
+    ), patch.object(SmarthomesecCoordinator, "login") as mock_login:
+        with pytest.raises(ConnectionGivenUp):
+            coord._rest_call_get("panel/cycle")
+
+    mock_login.assert_not_called()
+
+
+def test_command_401_while_given_up_never_logs_in():
+    coord = _coord()
+    coord._gave_up = True
+    coord._last_login_at = None
+
+    with patch(
+        "custom_components.smarthomesec.requests.post", return_value=_http(401)
+    ), patch.object(SmarthomesecCoordinator, "login") as mock_login:
+        with pytest.raises(ConnectionGivenUp):
+            coord._rest_call_post("panel/mode", {"area": 1})
+
+    mock_login.assert_not_called()
 
 
 def test_login_during_cooldown_is_deferred_not_called():
