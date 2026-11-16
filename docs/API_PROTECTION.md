@@ -19,8 +19,9 @@ handled as follows:
 
 Normal use is not affected: one login at startup, one live connection, and regular polling.
 
-**Reconnect backoff.** When the server rejects the live connection's token, the integration waits
-before retrying. The wait starts at 20 seconds and doubles each time, up to 30 minutes.
+**Reconnect pacing.** After the first rejection of the live connection's token, the integration waits
+20 seconds and retries with the same token. From the second rejection on, it logs in again, but only
+when the 5-minute cooldown allows, so recovery attempts are never closer together than that.
 
 **Give-up.** If the rejections keep coming (5 in a row, or over an hour), the integration stops
 retrying the live connection on its own. It keeps polling for the alarm state, so entities still

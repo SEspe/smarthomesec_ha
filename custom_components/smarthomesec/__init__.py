@@ -17,8 +17,6 @@ import voluptuous as vol
 from custom_components.smarthomesec.ws_client import WSClient
 from custom_components.smarthomesec import redact
 from custom_components.smarthomesec.protection import (
-    LOGIN_COOLDOWN,
-    WS_GIVE_UP_FAILURES,
     CooldownActive,
     backoff_delay,
     cooldown_remaining,
@@ -103,19 +101,26 @@ TOKEN_LOOP_ISSUE = "token_loop"
 
 @ha_callback
 def _async_set_token_loop_issue(hass: HomeAssistant, active: bool) -> None:
-    """Show or clear the Repairs issue. Runs in the event loop."""
-    if active:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            TOKEN_LOOP_ISSUE,
-            is_fixable=False,
-            is_persistent=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key=TOKEN_LOOP_ISSUE,
-        )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, TOKEN_LOOP_ISSUE)
+    """Show or clear the Repairs issue. Runs in the event loop.
+
+    Never raises: a missing issue registry must not break setup or the
+    WebSocket thread. The log line is the fallback signal.
+    """
+    try:
+        if active:
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                TOKEN_LOOP_ISSUE,
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key=TOKEN_LOOP_ISSUE,
+            )
+        else:
+            ir.async_delete_issue(hass, DOMAIN, TOKEN_LOOP_ISSUE)
+    except Exception as ex:  # pragma: no cover - defensive
+        _LOGGER.debug("Repairs issue update skipped: %s", ex)
 
 # Hvor lenge vi venter på at WS-tråden avslutter ved unload.
 WS_THREAD_JOIN_TIMEOUT = 10
