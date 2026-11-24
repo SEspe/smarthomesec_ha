@@ -2,6 +2,13 @@
 
 All notable changes to this integration are listed here, newest first. Releases are also on the [GitHub releases page](https://github.com/SEspe/smarthomesec_ha/releases).
 
+## 0.1.26
+
+No change to the integration's behaviour. This release makes the repository ready for the HACS default store.
+
+- **CI:** the HACS validation runs all default-store checks (brands, topics, license, issues). Nothing is ignored any more. (PR #62)
+- **Docs:** the vendor API protection spec is now in `docs/specs/vendor-api-protection.md`, marked as implemented. (PR #53)
+
 ## 0.1.25
 
 Promotes the 0.1.25 pre-releases (b1, b2, b3) to a stable release.
