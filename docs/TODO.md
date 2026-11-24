@@ -3,9 +3,10 @@
 ## Decisions for the owner
 
 - [x] **Vendor disclosure (disarm without a PIN).** Disarming with no PIN, or with an empty PIN, succeeds on a VESTA panel. First documented in `docs/VESTA_API.md` on 2026-09-22, reproduced by the probe on 2026-11-07. The README security section (PR #40, merged) says so. **Decided 2026-11-24 by the owner: no disclosure to the alarm provider.** The README stays as it is.
-- [ ] **HACS default store (`hacs/default`).** Hold lifted 2026-11-24, since the vendor decision is made. The validate workflow runs all default-store checks without an `ignore` key (passed, run 45479308170). Remaining: submit the PR to `hacs/default` when the owner asks. Check the repo for an existing `smarthomesec` domain first (none on 2026-11-24).
+- [x] **HACS default store (`hacs/default`).** Hold lifted 2026-11-24. Filed as `hacs/default` PR #14878 on 2026-11-24 (one line, `SEspe/smarthomesec_ha`). Validation on `main` passed without an `ignore` key (run 45481436502). Next: wait for the review queue. Do not request reviews; the template says that gets the PR closed.
 - [ ] **Production upgrade.** Production HA is still on 0.1.24, which has no vendor API protection. It is the unprotected side of the two-instance loop. Upgrade it to a beta, or to the next stable release, once the test unit has run cleanly for a while. Decide which.
-- [x] **Stable release.** `0.1.25` released from `0.1.25b3` (2026-11-24). Release PR and tag `0.1.25`; see CHANGELOG.md.
+- [x] **Stable release.** `0.1.25` released from `0.1.25b3` (2026-11-24, PR #61). `0.1.26` released the same day (PR #63, no behaviour change, for the HACS checklist).
+- [ ] **Production upgrade to 0.1.25 or 0.1.26.** Still on 0.1.24. The owner decides when.
 
 ## Pending verification (test unit on 0.1.25b3)
 
@@ -14,6 +15,7 @@
 
 ## Waiting on others
 
+- [ ] **`hacs/default` PR #14878.** Filed 2026-11-24. About 876 PRs carry the "New default repository" label, and the queue is handled oldest first, so the wait may be long. Check it from time to time; respond only if a maintainer asks for something.
 - [ ] **Upstream license.** [koying/smarthomesec_ha#3](https://github.com/koying/smarthomesec_ha/issues/3): Chris replied that he is fine with the fork and considers the upstream repo public domain. He has not added a LICENSE upstream. Issue left open; nothing to do unless he adds one.
 - [ ] **Upstream PR #48 (koying).** Merged here. Upstream may still want the change; nothing to do.
 
@@ -29,7 +31,7 @@
 
 ## Open PRs
 
-None.
+- `hacs/default` #14878 (external, see above). No open PRs in this repo.
 
 ## Done
 
@@ -57,7 +59,11 @@ None.
 - **Repairs text fix** (PR #57, merged). A duplicate `issues` block had dropped the text; a test now fails on duplicate keys.
 - **Live connection sensor on handshake** (PR #58, merged). On when the server accepts the connection (40), off after a later rejection (44) or during give-up.
 - **Pre-releases:** `0.1.25b1` (PR #51, closed; tag from PR #54), `0.1.25b2` (PR #56), `0.1.25b3` (PR #59). `0.1.25b3` is the current beta.
-- **Spec and user docs:** `docs/specs/vendor-api-protection.md` (PR #53 draft, spec branch) and `docs/API_PROTECTION.md`.
+- **Spec and user docs:** `docs/specs/vendor-api-protection.md` (PR #53, merged 2026-11-24, updated to the implemented state) and `docs/API_PROTECTION.md`.
+- **Release 0.1.25** (PR #61, tag and GitHub release 2026-11-24). Vendor API protection, stable.
+- **Release 0.1.26** (PR #63, 2026-11-24). No behaviour change: HACS checks run without an ignore list; spec in docs.
+- **HACS validation without ignore** (PR #62, merged 2026-11-24). Removes the `ignore` key from `validate.yml`; records the vendor decision and lifts the HACS hold.
+- **Closed as superseded:** PR #60 (session notes 2026-11-16), replaced by PR #62.
 
 ## Session notes: 2026-11-16
 
@@ -77,4 +83,9 @@ None.
 - **Test unit log, 2026-11-22 to 2026-11-24** (`home-assistant_2026-11-24T20-10-01`, 5,000 lines, capped): one SmartHomeSec "Timeout from API" warning, and no login, 401, cooldown, give-up or Repairs entries. Other warnings and errors came from other integrations.
 - **Debug level:** info or warning is enough for normal running. Turn SmartHomeSec to debug only for a short window when checking logins or the loop.
 - **Still open:** production upgrade (still 0.1.24), the two-instance warning idea, and the vendor disclosure decision.
-
+- **Vendor decision:** recorded in the Decisions section above.
+- **Similar integrations on `hacs/default`:** no SmartHomeSec, VESTA or Climax entry, so the domain is free. About 54 alarm-related integrations exist, all for other vendors. None blocks the listing.
+- **Queue size:** `hacs/default` had 921 open PRs (876 labelled "New default repository") on 2026-11-24. 202 were opened in the past week, and 568 merged in the same week.
+- **Other work:** the historian follow-up is tracked outside this repo, so it is not described here.
+- **Owner preferences:** the owner wants session notes after each day's work, and prefers merges only when asked.
+- **Next session:** check PR #14878 when the owner asks. Decide the production upgrade. Decide whether the Repairs card stays visible after "Ignore".
