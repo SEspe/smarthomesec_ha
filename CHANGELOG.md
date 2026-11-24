@@ -2,6 +2,18 @@
 
 All notable changes to this integration are listed here, newest first. Releases are also on the [GitHub releases page](https://github.com/SEspe/smarthomesec_ha/releases).
 
+## 0.1.25
+
+Promotes the 0.1.25 pre-releases (b1, b2, b3) to a stable release.
+
+- **Protects the vendor API from abuse.** The integration logs in at most once every 5 minutes. Background polls skip while a login is on cooldown. Arm, disarm and Retry connection fail at once with the wait time. (PR #54)
+- **Stops retrying after repeated token rejections.** After 5 rejections in a row, or an hour of failures, the integration stops retrying the live connection and writes one ERROR line. Polls keep the last known state. Polls and commands do not log in while it has given up. (PR #54, PR #55)
+- **Repairs issue** "SmartHomeSec has stopped retrying the live connection", with a fix-and-retry description. It clears when live events return or when the integration is reloaded. Norwegian and English text. (PR #54, PR #57)
+- **Retry connection button** (diagnostic). Starts one login now, and follows the same cooldown as a command. (PR #54)
+- **Live connection sensor** (diagnostic). On when the server accepts the live connection, off after a later rejection or while the integration has given up. (PR #54, PR #58)
+- **Diagnostic log lines** show a short fingerprint and the age of the token. The token itself is never logged. (PR #50)
+- **Docs:** `docs/API_PROTECTION.md` explains the limits, what you will see, and how to fix a two-instance loop: give each Home Assistant instance its own SmartHomeSec user.
+
 ## 0.1.24
 
 - **Fix:** an old WebSocket thread no longer keeps reconnecting with an expired token after the coordinator has replaced it. Before the fix, it reconnected about every 47 seconds and filled the logs with warnings. Alarms were not affected, because polling kept the data current. (PR #48, reported by koying.)
