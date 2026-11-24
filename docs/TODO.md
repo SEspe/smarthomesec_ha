@@ -2,8 +2,8 @@
 
 ## Decisions for the owner
 
-- [ ] **Vendor disclosure (disarm without a PIN).** Disarming with no PIN, or with an empty PIN, succeeds on a VESTA panel. First documented in `docs/VESTA_API.md` on 2026-09-22, reproduced by the probe on 2026-11-07. The README security section (PR #40, merged) says so. Decide whether to tell the alarm provider, and what, before anything else is published.
-- [ ] **HACS default store (`hacs/default`).** A strict HACS run passes every check on the MIT version (2026-11-07). Hold submission until the vendor question is settled.
+- [x] **Vendor disclosure (disarm without a PIN).** Disarming with no PIN, or with an empty PIN, succeeds on a VESTA panel. First documented in `docs/VESTA_API.md` on 2026-09-22, reproduced by the probe on 2026-11-07. The README security section (PR #40, merged) says so. **Decided 2026-11-24 by the owner: no disclosure to the alarm provider.** The README stays as it is.
+- [ ] **HACS default store (`hacs/default`).** Hold lifted 2026-11-24, since the vendor decision is made. The validate workflow runs all default-store checks without an `ignore` key (passed, run 45479308170). Remaining: submit the PR to `hacs/default` when the owner asks. Check the repo for an existing `smarthomesec` domain first (none on 2026-11-24).
 - [ ] **Production upgrade.** Production HA is still on 0.1.24, which has no vendor API protection. It is the unprotected side of the two-instance loop. Upgrade it to a beta, or to the next stable release, once the test unit has run cleanly for a while. Decide which.
 - [x] **Stable release.** `0.1.25` released from `0.1.25b3` (2026-11-24). Release PR and tag `0.1.25`; see CHANGELOG.md.
 
