@@ -2,6 +2,13 @@
 
 All notable changes to this integration are listed here, newest first. Releases are also on the [GitHub releases page](https://github.com/SEspe/smarthomesec_ha/releases).
 
+## 0.1.27
+
+Changes requested in the hacs/default review.
+
+- **Disarm needs a PIN.** Disarming without a code is refused, in the entity and in the coordinator, with a clear message. Before, an empty PIN was sent, and the server disarmed the area. Arming is unchanged. Automations that disarm without a code will now fail. (PR #65)
+- **Retry on network errors.** If the cloud or the internet is unreachable during setup, for example after a restart, Home Assistant retries setup. Other setup failures (for example a wrong password) still fail as before. (PR #65)
+
 ## 0.1.26
 
 No change to the integration's behaviour. This release makes the repository ready for the HACS default store.
