@@ -117,13 +117,14 @@ def test_the_pin_is_sent_as_a_string_not_a_number():
     assert isinstance(_posted("1234")["pincode"], str)
 
 
-def test_a_missing_code_does_not_raise():
-    """alarm_disarm(code=None) is a legal HA call -- int(None) raised TypeError.
+def test_a_disarm_without_a_pin_is_refused_before_anything_is_sent():
+    """The server accepts an empty PIN and disarms, so the coordinator must refuse it."""
+    from homeassistant.exceptions import ServiceValidationError
 
-    code_arm_required governs arming only, so a disarm can legitimately arrive
-    with no code at all.
-    """
-    assert _posted(None, mode="disarm")["pincode"] == ""
+    with pytest.raises(ServiceValidationError):
+        _posted(None, mode="disarm")
+    with pytest.raises(ServiceValidationError):
+        _posted("", mode="disarm")
 
 
 def test_the_rest_of_the_payload_is_unchanged():
