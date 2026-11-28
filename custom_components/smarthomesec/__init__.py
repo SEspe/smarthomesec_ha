@@ -31,7 +31,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
 from homeassistant.core import callback as ha_callback
 from homeassistant.helpers import config_validation as cv
@@ -1141,6 +1141,10 @@ class SmarthomesecCoordinator(DataUpdateCoordinator):
         Serveren validerer `pincode` når feltet er med, og bare da – målt med
         tools/mode_probe 2026-09-22 (feil PIN gir HTTP 400 / code 996).
         """
+        # A disarm needs the PIN. The server accepts an empty one and disarms, so refuse here,
+        # whatever the caller is (entity, retry, a future script).
+        if mode == "disarm" and not pin:
+            raise ServiceValidationError("A PIN is required to disarm this alarm.")
         payload = {
             "area": int(area),
             "pincode": "" if pin is None else str(pin),
