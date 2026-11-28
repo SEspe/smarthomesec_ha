@@ -31,6 +31,7 @@ from homeassistant.const import (
     CONF_USERNAME,
     Platform,
 )
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
 from homeassistant.core import callback as ha_callback
 from homeassistant.helpers import config_validation as cv
@@ -159,6 +160,18 @@ async def _async_log_startup_message(hass: HomeAssistant) -> None:
     _LOGGER.info(STARTUP_MESSAGE, INTEGRATION_TITLE, version, ISSUE_URL)
 
 
+def _is_connection_error(ex: BaseException) -> bool:
+    """True if the error, or anything it was raised from, is a network failure."""
+    seen = set()
+    cur: BaseException | None = ex
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, (requests.ConnectionError, requests.Timeout, TimeoutError, ConnectionError)):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
 
@@ -191,6 +204,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Alarm areas: %s", alarm_areas)
 
     except Exception as ex:
+        if _is_connection_error(ex):
+            # Network or vendor cloud down (for example during a restart): let Home Assistant retry.
+            raise ConfigEntryNotReady(f"SmartHomeSec is not reachable yet: {ex}") from ex
         _LOGGER.error("Failed to connect to SmartHomeSec: %s", ex)
         return False
 

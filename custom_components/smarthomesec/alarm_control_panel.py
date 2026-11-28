@@ -11,6 +11,7 @@ from homeassistant.components.alarm_control_panel import (
     CodeFormat,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.const import (
     CONF_NAME,
 )
@@ -128,8 +129,10 @@ class SmarthomesecAlarm(CoordinatorEntity, AlarmControlPanelEntity):
         self.coord.set_alarm_mode(self.area, "arm", code)
 
     def alarm_disarm(self, code: str | None = None) -> None:
-        """Send disarm command."""
+        """Send disarm command. The panel needs the PIN; the server accepts an empty one."""
         _LOGGER.info("alarm_disarm")
+        if not code:
+            raise ServiceValidationError("A code is required to disarm this alarm.")
         self.coord.set_alarm_mode(self.area, "disarm", code)
 
     def alarm_arm_home(self, code: str | None = None) -> None:
